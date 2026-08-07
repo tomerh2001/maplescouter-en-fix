@@ -1,0 +1,91 @@
+{
+ "trans": [
+  {
+   "bucket": "skill",
+   "idx": 0,
+   "count": 25
+  },
+  {
+   "bucket": "item",
+   "idx": 0,
+   "count": 60
+  },
+  {
+   "bucket": "item",
+   "idx": 1,
+   "count": 6
+  },
+  {
+   "bucket": "sentence",
+   "idx": 0,
+   "count": 65
+  },
+  {
+   "bucket": "sentence",
+   "idx": 1,
+   "count": 65
+  },
+  {
+   "bucket": "sentence",
+   "idx": 2,
+   "count": 33
+  },
+  {
+   "bucket": "ui",
+   "idx": 0,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 1,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 2,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 3,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 4,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 5,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 6,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 7,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 8,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 9,
+   "count": 90
+  },
+  {
+   "bucket": "ui",
+   "idx": 10,
+   "count": 64
+  }
+ ],
+ "reviewCount": 10,
+ "seedverCount": 8
+}

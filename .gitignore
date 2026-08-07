@@ -1,2 +1,10 @@
 node_modules/
 .DS_Store
+work/chunks/
+work/gamedata/
+work/out/
+work/batches/
+work/recovered/
+work/home.html
+work/*.json
+!work/manifest.json
