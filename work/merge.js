@@ -24,14 +24,14 @@ const OUT = path.join(W, 'out');
 const B = path.join(W, 'batches');
 // verified finals first (higher priority), then pre fallbacks, then seed-verified
 for (const f of fs.readdirSync(B)) {
-  const m = f.match(/^trans_(\w+)_(\d+)\.json$/);
+  const m = f.match(/^(trans|delta)_(\w+)_(\d+)\.json$/);
   if (!m) continue;
-  const fin = path.join(OUT, `trans_${m[1]}_${m[2]}.json`);
-  const pre = path.join(OUT, `pre_${m[1]}_${m[2]}.json`);
-  const finA = fs.existsSync(fin) ? loadArr(fin) : null;
+  const finName = m[1] === 'trans' ? `trans_${m[2]}_${m[3]}.json` : `delta_${m[2]}_${m[3]}.json`;
+  const preName = m[1] === 'trans' ? `pre_${m[2]}_${m[3]}.json` : `dpre_${m[2]}_${m[3]}.json`;
+  const finA = fs.existsSync(path.join(OUT, finName)) ? loadArr(path.join(OUT, finName)) : null;
   if (finA && finA.length) addAll(finA, f);
   else {
-    const preA = fs.existsSync(pre) ? loadArr(pre) : null;
+    const preA = fs.existsSync(path.join(OUT, preName)) ? loadArr(path.join(OUT, preName)) : null;
     if (preA && preA.length) { addAll(preA, f); problems.push(f + ' using unverified pre'); }
     else problems.push(f + ' NO OUTPUT');
   }
