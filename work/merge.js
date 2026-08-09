@@ -90,6 +90,12 @@ for (const k of Object.keys(i18nPatch)) {
 
 // ================= DOM dictionary =================
 const dict = {};
+// Lowest priority: the site's own en.json table — catches strings that exist as
+// i18n keys but are ALSO hardcoded in JSX elsewhere (Reset/Save buttons etc.).
+for (const [ko, en] of Object.entries(enTable)) {
+  if (ko.length < 2 || CODE_JUNK.test(ko) || !en || typeof en !== 'string' || en === ko || !hangul.test(ko)) continue;
+  dict[ko] = en;
+}
 for (const [ko, en] of official) {
   if (ko.length < 2 || CODE_JUNK.test(ko) || !en || en === ko) continue;
   dict[ko] = en;
@@ -100,6 +106,28 @@ for (const e of fixList) {
   const cur = e.current, prop = e.proposed;
   if (cur && prop && cur !== prop && cur.length <= 40 && !/[{}]/.test(cur) && !hangul.test(cur)) dict[cur] = prop;
 }
+// review fixes also override the folded en.json entries (KO key → fixed EN)
+for (const [ko, en] of fixes) if (hangul.test(ko) && ko.length >= 2 && !CODE_JUNK.test(ko)) dict[ko] = en;
+
+// manual gap entries found in live QA
+const MANUAL = {
+  '로그인': 'Log In',
+  '개인정보처리방침': 'Privacy Policy',
+  '이용약관': 'Terms of Service',
+  '문의하기': 'Contact Us',
+  '메이플 보스 클리어 랭킹': 'MapleStory Boss Clear Ranking',
+  '1소재 경험치 :': 'EXP per run :',
+  '윌': 'Will', '스우': 'Lotus', '데미안': 'Damien', '루시드': 'Lucid', '더스크': 'Gloom',
+  '진힐라': 'Verus Hilla', '듄켈': 'Darknell', '세렌': 'Chosen Seren', '칼로스': 'Kalos',
+  '카링': 'Kaling', '림보': 'Limbo', '발드릭스': 'Baldrix', '검마': 'Black Mage',
+  '슬라임': 'Guardian Angel Slime', '힐라': 'Hilla', '아델': 'Adele',
+  '저장하기': 'Save', '초기화': 'Reset', '불러오기': 'Load', '적용하기': 'Apply', '닫기': 'Close',
+  '파괴방지 (선택 단계에서 파괴 방지)': 'Safeguard (prevents destruction at the selected stars)',
+  '파괴복구 (선택 단계에서 파괴 시 자동 복구)': 'Boom Recovery (auto-restore when destroyed at the selected stars)',
+  '공격 시 20% 확률로 2레벨 슬로우효과 적용': '20% chance to apply Level 2 Slow effect when attacking',
+  '내 장비 또는 보관함에서 장비를 클릭하면 해당 장비의 옵션이 초기값으로 적용됩니다.': 'Click an item in My Equipment or the Locker to load its options as the starting values.',
+};
+for (const [k, v] of Object.entries(MANUAL)) if (!dict[k]) dict[k] = v;
 
 // ================= rules =================
 const rules = [

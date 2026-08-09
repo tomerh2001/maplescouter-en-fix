@@ -186,6 +186,53 @@
 
   var HANGUL = /[가-힣]/;
 
+  var KO_NUM_UNITS = { '조': 1e12, '억': 1e8, '만': 1e4 };
+
+  // "2086억 6801만 6589" → "208,668,016,589"
+  function koreanNumberToEnglish(t) {
+    if (!/^[\d,\s조억만]+$/.test(t) || !/[조억만]/.test(t)) return null;
+    var total = 0, rest = t.replace(/,/g, '');
+    var re = /(\d+)\s*([조억만])/g, m, tail = rest;
+    while ((m = re.exec(rest))) { total += parseInt(m[1], 10) * KO_NUM_UNITS[m[2]]; tail = rest.slice(m.index + m[0].length); }
+    var last = tail.trim().match(/^(\d+)$/);
+    if (last) total += parseInt(last[1], 10);
+    if (!total) return null;
+    return total.toLocaleString('en-US');
+  }
+
+  var KO_DAYS = { '월': 'Mon', '화': 'Tue', '수': 'Wed', '목': 'Thu', '금': 'Fri', '토': 'Sat', '일': 'Sun' };
+  var MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Single-char measure/label nodes that follow numeric inputs.
+  var UNIT_LABELS = { '성': '★', '회': 'time(s)', '개': 'pc(s)', '인': 'player(s)', '결과': 'Result', '없음': 'None' };
+
+  // Built-in dynamic rules — run after dict/JSON rules miss.
+  function builtinRules(t, d) {
+    var num = koreanNumberToEnglish(t);
+    if (num != null) return num;
+    var dm = t.match(/^(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*([월화수목금토일])요일$/);
+    if (dm) return KO_DAYS[dm[4]] + ', ' + MONTHS[+dm[2]] + ' ' + dm[3] + ', ' + dm[1];
+    if (UNIT_LABELS[t] != null) return UNIT_LABELS[t];
+    var lv = t.match(/^(\d+)\s*~\s*(\d+)제$/);
+    if (lv) return 'Lv ' + lv[1] + '~' + lv[2];
+    var lv1 = t.match(/^(\d+)제$/);
+    if (lv1) return 'Lv ' + lv1[1];
+    var bm = t.match(/^(.+?)\s*\(보약\)$/);
+    if (bm) { var base = d.dict[bm[1].trim()]; if (base) return base + ' (Buffs)'; }
+    var um = t.match(/^유저 정보\s*:\s*(.*)$/);
+    if (um) return 'User Info: ' + hangulRunPass(um[1], d);
+    return null;
+  }
+
+  // Replace maximal Korean runs inside composite strings when the WHOLE run
+  // is a known dict term (class names, boss names inside "nick / class Lv.X").
+  function hangulRunPass(t, d) {
+    return t.replace(/[가-힣][가-힣 ]*[가-힣]|[가-힣]/g, function (run) {
+      var hit = d.dict[run];
+      return hit != null ? hit : run;
+    });
+  }
+
   function translateString(s) {
     var d = data();
     var trimmed = s.trim();
@@ -210,8 +257,46 @@
         if (mm) { out = rule[2].replace(/\$(\d)/g, function (_, n) { return mm[+n] != null ? mm[+n] : ''; }); break; }
       }
     }
+    if (out == null) out = builtinRules(trimmed, d);
+    // Last resort for composite nodes: translate embedded known terms.
+    // Never touch strings with @handles (author credits, server@nickname).
+    if (out == null && trimmed.indexOf('@') === -1) {
+      var passed = hangulRunPass(trimmed, d);
+      if (passed !== trimmed) out = passed;
+    }
     if (out == null) return null;
     return s.replace(trimmed, out);
+  }
+
+  function translateTitle() {
+    if (pathLocale() !== 'en') return;
+    var d = data();
+    var t = document.title;
+    if (!t || !HANGUL.test(t)) return;
+    var parts = t.split(/(\s[-|·]\s|\s\|\s|^\|\s?)/);
+    var changed = t.split(' - ').map(function (seg) {
+      var s2 = seg.replace(/^\|\s*/, '');
+      var hit = d.dict[s2.trim()];
+      return hit != null ? hit : (s2 === '환산주스탯' ? 'Maple Scouter' : hangulRunPass(s2, d));
+    }).join(' - ');
+    changed = changed.replace(/환산주스탯/g, 'Maple Scouter');
+    changed = changed.replace(/^Maple Scouter\s*[-|]\s*Maple Scouter$/, 'Maple Scouter');
+    if (changed !== t) document.title = changed;
+  }
+
+  // The header logo is two spans reading 환산/주스탯 (the site's Korean brand).
+  // Rebrand to the site's own English name instead of a literal translation.
+  function fixLogo() {
+    if (pathLocale() !== 'en') return;
+    var link = document.querySelector('header a[href="/"], header a[href^="/en"]');
+    if (!link) return;
+    var spans = link.querySelectorAll('span');
+    if (spans.length >= 2 && spans[0].textContent !== 'Maple') {
+      spans[0].textContent = 'Maple';
+      spans[1].textContent = 'Scouter';
+    } else if (spans.length === 1 && spans[0].textContent !== 'Maple Scouter') {
+      spans[0].textContent = 'Maple Scouter';
+    }
   }
 
   function translateTextNode(node) {
@@ -323,7 +408,8 @@
     injectCss();
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setInterval(backupRegion, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();

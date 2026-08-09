@@ -1,0 +1,12 @@
+/* MapleScouter English Fix — UI polish for longer English strings */
+
+/* Stat-input labels (input/result forms): the site truncates at ~105px which
+   cuts off English terms ("Cooldown Red..."). Let them wrap to two lines. */
+span.text-text-gray-high.w-full.truncate.text-sm.font-medium {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.15 !important;
+  font-size: 12.5px !important;
+  word-break: keep-all;
+}

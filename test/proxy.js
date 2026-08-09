@@ -59,16 +59,16 @@ const server = http.createServer((req, res) => {
       const ct = up.headers['content-type'] || '';
       const isText = /html|javascript|json|css/.test(ct);
       const headers = { ...up.headers };
-      delete headers['content-length'];
-      delete headers['content-encoding'];
       delete headers['content-security-policy'];
       delete headers['strict-transport-security'];
       if (headers.location) headers.location = headers.location.replace('https://' + SITE, '');
       if (!isText) {
-        res.writeHead(up.statusCode, headers);
+        res.writeHead(up.statusCode, headers); // keep content-encoding/length: piping raw bytes
         up.pipe(res);
         return;
       }
+      delete headers['content-length'];
+      delete headers['content-encoding'];
       const chunks = [];
       const stream = up.headers['content-encoding'] === 'gzip' ? up.pipe(zlib.createGunzip()) : up;
       stream.on('data', (c) => chunks.push(c));
