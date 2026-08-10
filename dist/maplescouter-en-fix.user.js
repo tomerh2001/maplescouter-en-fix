@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.1
+// @version      1.4.2
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -343,7 +343,7 @@
     }
   }
 
-  // A small clickable "Patched by Tomerh2001.com" credit placed as a sibling right
+  // A small clickable "Patched by Tomerh2001" credit placed as a sibling right
   // after the logo link (nested <a> is invalid, so it can't go inside the logo). It
   // sits inline in the header row, bottom-aligned like a subtitle, and links to the
   // patch repo. Being a normal inline flex item, it never overlaps the header.
@@ -363,7 +363,7 @@
     a.href = CREDIT_URL;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
-    a.textContent = 'Patched by Tomerh2001.com';
+    a.textContent = 'Patched by Tomerh2001';
     a.title = 'English patch by tomerh2001 — click for the source';
     a.style.cssText = 'position:absolute;z-index:5;pointer-events:auto;' +
       'left:' + (link.offsetLeft + (wordmark ? wordmark.offsetLeft : 28)) + 'px;' +
