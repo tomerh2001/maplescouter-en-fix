@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.1
+// @version      1.3.2
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -464,12 +464,32 @@
     return false;
   }
 
+  // Compact boss-viability badges carry their full meaning in a hover tooltip.
+  var BADGE_TITLES = {
+    '6P Min': 'Minimum spec to clear with 6 players',
+    '4P Min': 'Minimum spec to clear with 4 players',
+    '3P Min': 'Minimum spec to clear with 3 players',
+    '2P Min': 'Minimum spec to clear with 2 players',
+    '3-DPS Min': 'Minimum spec with 3 DPS players',
+    'Bish+2 Min': 'Minimum spec: Bishop + 2 DPS',
+    'Solo Min': 'Minimum spec to solo clear',
+    'Party Min': 'Minimum spec to clear in a party',
+    'Solo OK': 'Solo clear viable',
+    'Party OK': 'Party clear viable (as DPS)',
+    'Comfy Solo': 'Comfortable solo clear',
+    "Can't Enter": 'Below the entry requirements'
+  };
+
   function translateTextNode(node) {
     var v = node.nodeValue;
     if (!v) return;
     if (HANGUL.test(v) && isPlayerNameContext(node)) return;
     var r = translateString(v);
     if (r != null && r !== v) node.nodeValue = r;
+    var shown = (r != null ? r : v).trim();
+    if (BADGE_TITLES[shown] && node.parentElement && !node.parentElement.title) {
+      node.parentElement.title = BADGE_TITLES[shown];
+    }
   }
 
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];

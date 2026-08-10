@@ -183,6 +183,19 @@ const OVERRIDES = {
   '방무(300)': 'IED (300)',
   '방무(380)': 'IED (380)',
   '직접 입력': 'Manual Input',
+  // boss viability badges: compact single-line forms (full meaning goes into a
+  // hover tooltip added by the userscript)
+  '6인 최소컷': '6P Min',
+  '4인 최소컷': '4P Min',
+  '3인 최소컷': '3P Min',
+  '2인 최소컷': '2P Min',
+  '격수 3인 최소컷': '3-DPS Min',
+  '숍+격수2인 최소컷': 'Bish+2 Min',
+  '솔플 최소컷': 'Solo Min',
+  '파티 최소컷': 'Party Min',
+  '솔플 가능': 'Solo OK',
+  '파티격 가능': 'Party OK',
+  '솔플 여유컷': 'Comfy Solo',
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
 for (const n of NICKNAMES) { delete dict[n]; }
@@ -202,6 +215,17 @@ dict['Ignore Dff(300)'] = 'IED (300)';
 dict['Ignore Dff(380)'] = 'IED (380)';
 dict['Manual Input (Character Stats)'] = 'Manual Input';
 dict['Enter Directly (Character Stats Changes)'] = 'Manual Input';
+dict['6-Player Min Spec'] = '6P Min';
+dict['4-Player Min Spec'] = '4P Min';
+dict['3-Player Min Spec'] = '3P Min';
+dict['2-Player Min Spec'] = '2P Min';
+dict['3-DPS Min Spec'] = '3-DPS Min';
+dict['Bishop + 2 DPS Min Spec'] = 'Bish+2 Min';
+dict['Solo Min Spec'] = 'Solo Min';
+dict['Party Min Spec'] = 'Party Min';
+dict['Solo Viable'] = 'Solo OK';
+dict['Party Viable'] = 'Party OK';
+dict['Solo Comfort Spec'] = 'Comfy Solo';
 
 // ================= rules =================
 const rules = [
