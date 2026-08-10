@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.2.0
+// @version      1.3.0
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -382,18 +382,32 @@
       if (t === 'Save Preset' || t === '프리셋 저장') { saveBtn = buttons[i]; break; }
     }
     if (!saveBtn || !saveBtn.parentElement) return;
-    function mk(id, label, handler) {
+    var SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide h-4 w-4">';
+    var DOC = '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>';
+    var ICONS = {
+      up: SVG_OPEN + DOC + '<path d="M12 18v-6"/><path d="m15 15-3-3-3 3"/></svg>',
+      down: SVG_OPEN + DOC + '<path d="M12 12v6"/><path d="m9 15 3 3 3-3"/></svg>'
+    };
+    function mk(id, label, icon, handler) {
       var b = document.createElement('button');
       b.id = id;
       b.className = saveBtn.className;
       b.type = 'button';
-      b.textContent = label;
+      b.innerHTML = '<span>' + label + '</span>' + icon;
       b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); handler(); });
       return b;
     }
     var row = saveBtn.parentElement;
-    row.appendChild(mk('msfix-export-preset', 'Export Preset', exportPreset));
-    row.appendChild(mk('msfix-import-preset', 'Import Preset', importPreset));
+    row.appendChild(mk('msfix-export-preset', 'Export Preset', ICONS.up, exportPreset));
+    row.appendChild(mk('msfix-import-preset', 'Import Preset', ICONS.down, importPreset));
+    // four buttons no longer fit next to the title — give the title its own line
+    var outer = row.parentElement;
+    if (outer && outer.className && outer.className.indexOf('justify-between') !== -1) {
+      outer.style.flexDirection = 'column';
+      outer.style.alignItems = 'flex-start';
+      outer.style.gap = '10px';
+      row.style.flexWrap = 'wrap';
+    }
   }
 
   // The homepage update-history table is Korean-only API content that cannot be
@@ -514,6 +528,8 @@
   var FLOAT_SELECTOR = '[data-radix-popper-content-wrapper], [role="tooltip"], [data-side][data-state]';
   var floatRects = new Map(); // element -> DOMRect (last known)
   var pinned = null;
+  // keep tracked rects accurate while scrolling (tooltips scroll with content until removed)
+  window.addEventListener('scroll', function () { refreshFloatRects(); }, { passive: true, capture: true });
 
   function trackFloating(root) {
     if (!root || root.nodeType !== 1) return;
@@ -559,7 +575,8 @@
     };
     pinned = { el: clone, watch: watch };
     document.addEventListener('mousemove', watch, true);
-    window.addEventListener('scroll', unpin, { once: true, capture: true });
+    // NOTE: no scroll-based unpin — the clone is viewport-fixed, so it stays put
+    // while scrolling and only closes when the mouse leaves its box.
   }
 
   function onFloatingRemoved(node) {

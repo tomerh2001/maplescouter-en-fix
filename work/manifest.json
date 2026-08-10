@@ -90,164 +90,16 @@
  "seedverCount": 8,
  "delta": [
   {
-   "bucket": "skill",
-   "idx": 0,
-   "count": 65
-  },
-  {
-   "bucket": "skill",
-   "idx": 1,
-   "count": 6
-  },
-  {
-   "bucket": "item",
-   "idx": 0,
-   "count": 65
-  },
-  {
-   "bucket": "item",
-   "idx": 1,
-   "count": 65
-  },
-  {
-   "bucket": "item",
-   "idx": 2,
-   "count": 65
-  },
-  {
-   "bucket": "item",
-   "idx": 3,
-   "count": 21
-  },
-  {
+   "gen": "delta2",
    "bucket": "sentence",
    "idx": 0,
-   "count": 65
+   "count": 2
   },
   {
-   "bucket": "sentence",
-   "idx": 1,
-   "count": 65
-  },
-  {
-   "bucket": "sentence",
-   "idx": 2,
-   "count": 65
-  },
-  {
-   "bucket": "sentence",
-   "idx": 3,
-   "count": 65
-  },
-  {
-   "bucket": "sentence",
-   "idx": 4,
-   "count": 65
-  },
-  {
-   "bucket": "sentence",
-   "idx": 5,
-   "count": 29
-  },
-  {
+   "gen": "delta2",
    "bucket": "ui",
    "idx": 0,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 1,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 2,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 3,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 4,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 5,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 6,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 7,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 8,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 9,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 10,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 11,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 12,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 13,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 14,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 15,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 16,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 17,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 18,
-   "count": 90
-  },
-  {
-   "bucket": "ui",
-   "idx": 19,
-   "count": 51
+   "count": 9
   }
  ]
 }

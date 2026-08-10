@@ -47,7 +47,7 @@ const official = new Map(JSON.parse(fs.readFileSync(path.join(W, 'official_map.j
 const covered = new Set();
 const OUT = path.join(W, 'out');
 for (const f of fs.readdirSync(OUT)) {
-  if (!/^(trans_|seedver_|pre_)/.test(f)) continue;
+  if (!/^(trans_|seedver_|pre_|delta|dpre)/.test(f)) continue;
   try { for (const e of JSON.parse(fs.readFileSync(path.join(OUT, f), 'utf8'))) if (e && e.ko) covered.add(e.ko); } catch (err) {}
 }
 console.log('already translated (workflow outputs):', covered.size);
@@ -94,13 +94,14 @@ for (const it of deltaU) {
   else if (/(상자|조각|기운|흔적|반지|훈장|장신구|방어구|무기|모자|장갑|신발|망토|견장|벨트|목걸이|귀고리|얼굴장식|눈장식|펜던트|주문서|물약|비약|정수|결정|보석|해머|큐브|불꽃|응축물|영약|편린|고리|결의|의지|엠블렘|뱃지)/.test(s)) buckets.item.push(it);
   else buckets.ui.push(it);
 }
+const GEN = process.argv[2] || 'delta';
 let deltaBatches = [];
 for (const [bucket, arr] of Object.entries(buckets)) {
   const size = bucket === 'ui' ? 90 : 65;
   for (let i = 0; i < arr.length; i += size) {
-    const name = `delta_${bucket}_${i / size}.json`;
+    const name = `${GEN}_${bucket}_${i / size}.json`;
     fs.writeFileSync(path.join(B, name), JSON.stringify(arr.slice(i, i + size), null, 1));
-    deltaBatches.push({ bucket, idx: i / size, count: Math.min(size, arr.length - i) });
+    deltaBatches.push({ gen: GEN, bucket, idx: i / size, count: Math.min(size, arr.length - i) });
   }
 }
 const man = JSON.parse(fs.readFileSync(path.join(W, 'manifest.json'), 'utf8'));

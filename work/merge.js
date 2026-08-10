@@ -24,10 +24,10 @@ const OUT = path.join(W, 'out');
 const B = path.join(W, 'batches');
 // verified finals first (higher priority), then pre fallbacks, then seed-verified
 for (const f of fs.readdirSync(B)) {
-  const m = f.match(/^(trans|delta)_(\w+)_(\d+)\.json$/);
+  const m = f.match(/^(trans|delta[0-9]*)_([a-z]+)_(\d+)\.json$/);
   if (!m) continue;
-  const finName = m[1] === 'trans' ? `trans_${m[2]}_${m[3]}.json` : `delta_${m[2]}_${m[3]}.json`;
-  const preName = m[1] === 'trans' ? `pre_${m[2]}_${m[3]}.json` : `dpre_${m[2]}_${m[3]}.json`;
+  const finName = f;
+  const preName = m[1] === 'trans' ? `pre_${m[2]}_${m[3]}.json` : `${m[1].replace('delta', 'dpre')}_${m[2]}_${m[3]}.json`;
   const finA = fs.existsSync(path.join(OUT, finName)) ? loadArr(path.join(OUT, finName)) : null;
   if (finA && finA.length) addAll(finA, f);
   else {
@@ -135,6 +135,12 @@ const MANUAL = {
   '파괴복구 (선택 단계에서 파괴 시 자동 복구)': 'Boom Recovery (auto-restore when destroyed at the selected stars)',
   '공격 시 20% 확률로 2레벨 슬로우효과 적용': '20% chance to apply Level 2 Slow effect when attacking',
   '내 장비 또는 보관함에서 장비를 클릭하면 해당 장비의 옵션이 초기값으로 적용됩니다.': 'Click an item in My Equipment or the Locker to load its options as the starting values.',
+  // page-title variants (server-rendered metadata uses spaced forms)
+  '아이템 메이커': 'Item Maker',
+  '내실 메이커': 'Foundation Maker',
+  // badge-legend variants that render WITH the closing paren (extraction captured them without)
+  '20분 실측 배율(마우스 호버 시 갱신 내용 확인)': 'Measured 20-min multiplier (hover to view update details)',
+  '보스 배율 변경(마우스 호버 시 갱신 내용 확인)': 'Boss multiplier changed (hover to view update details)',
   // hexa page (site strings newer than the corpus snapshot)
   '다른 기준으로 보기': 'Change Criteria',
   // boss burst-window popup
