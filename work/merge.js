@@ -44,6 +44,9 @@ for (let i = 0; i < manifest.seedverCount; i++) {
 }
 
 // ---- review fixes ----
+// user-rejected review fixes: the site's "HEXA" label for 스펙 is intentional
+// (the column shows the HEXA-equivalent stat) — keep it.
+const DROP_FIXES = new Set(['스펙']);
 const fixes = new Map();
 const fixList = [];
 for (let i = 0; i < manifest.reviewCount; i++) {
@@ -53,7 +56,7 @@ for (let i = 0; i < manifest.reviewCount; i++) {
   if (!arr) { problems.push('review_' + i + ' empty/none'); continue; }
   if (!(fin && fin.length)) problems.push('review_' + i + ' using unvalidated prefix');
   for (const e of arr) {
-    if (e && typeof e.ko === 'string' && typeof e.proposed === 'string' && e.proposed.trim()) {
+    if (e && typeof e.ko === 'string' && typeof e.proposed === 'string' && e.proposed.trim() && !DROP_FIXES.has(e.ko)) {
       fixes.set(e.ko, e.proposed);
       fixList.push(e);
     }
@@ -102,9 +105,12 @@ for (const [ko, en] of official) {
 }
 for (const [ko, en] of corpusOfficial) if (ko.length >= 2 && !CODE_JUNK.test(ko) && en && en !== ko) dict[ko] = en;
 for (const [ko, { en }] of trans) if (ko.length >= 2 && !CODE_JUNK.test(ko) && en && en !== ko) dict[ko] = en;
+// EN→EN fallback entries (only used if the bundle patch fails). Skip generic terms
+// that legitimately appear as other labels — rewriting them would mislabel those.
+const EN_FIX_BLACKLIST = new Set(['Boss Damage', 'HEXA', 'Damage', 'Critical Rate', 'Critical Damage', 'Final Damage', 'ATT', 'M.ATT']);
 for (const e of fixList) {
   const cur = e.current, prop = e.proposed;
-  if (cur && prop && cur !== prop && cur.length <= 40 && !/[{}]/.test(cur) && !hangul.test(cur)) dict[cur] = prop;
+  if (cur && prop && cur !== prop && cur.length <= 40 && !/[{}]/.test(cur) && !hangul.test(cur) && !EN_FIX_BLACKLIST.has(cur)) dict[cur] = prop;
 }
 // review fixes also override the folded en.json entries (KO key → fixed EN)
 for (const [ko, en] of fixes) if (hangul.test(ko) && ko.length >= 2 && !CODE_JUNK.test(ko)) dict[ko] = en;
@@ -126,6 +132,18 @@ const MANUAL = {
   '파괴복구 (선택 단계에서 파괴 시 자동 복구)': 'Boom Recovery (auto-restore when destroyed at the selected stars)',
   '공격 시 20% 확률로 2레벨 슬로우효과 적용': '20% chance to apply Level 2 Slow effect when attacking',
   '내 장비 또는 보관함에서 장비를 클릭하면 해당 장비의 옵션이 초기값으로 적용됩니다.': 'Click an item in My Equipment or the Locker to load its options as the starting values.',
+  // hexa page (site strings newer than the corpus snapshot)
+  '다른 기준으로 보기': 'Change Criteria',
+  '추천 템환산': 'Recommended Item Equiv.',
+  // hexa tooltip fragments (split across styled spans, matched trimmed)
+  '기운': 'Energy',
+  '개, 조각': ', Fragments',
+  '개 필요': ' needed',
+  '강화 시 헥환 :': 'HEXA stat gain :',
+  '헥환': 'HEXA stat',
+  '현재 강화 대비(누적)': 'vs. current enhancement (cumulative)',
+  '100억 당 최종뎀': 'FD per 10B mesos',
+  '효율': 'Efficiency',
 };
 for (const [k, v] of Object.entries(MANUAL)) if (!dict[k]) dict[k] = v;
 
@@ -138,6 +156,18 @@ const OVERRIDES = {
   '분석&최적화': 'Analysis',
   '랭킹&챌린지': 'Rankings',
   '정보센터': 'Info Center',
+  // stat-form labels: full official names, no abbreviations or extra qualifiers
+  '공격력': 'Attack Power',
+  '마력': 'Magic Attack',
+  '전투시 크확': 'Critical Rate',
+  '크확 수치': 'Critical Rate',
+  '보총뎀': 'Boss Damage + Damage',
+  '보공': 'Boss Damage',
+  '보뎀': 'Boss Damage',
+  '방무': 'IED',
+  '방무%': 'IED %',
+  '방무(300)': 'IED (300)',
+  '방무(380)': 'IED (380)',
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
 // also fix any English strings already rendered by the site's own table
@@ -147,6 +177,13 @@ dict['Analysis / Optimization'] = 'Analysis';
 dict['Analysis&Optimization'] = 'Analysis';
 dict['Ranking&Challenge'] = 'Rankings';
 dict['Information Center'] = 'Info Center';
+dict['M.Attack'] = 'Magic Attack';
+dict['M.ATT'] = 'Magic Attack';
+dict['Crit Rate (In Combat)'] = 'Critical Rate';
+dict['Boss Dmg + Dmg%'] = 'Boss Damage + Damage';
+dict['Ignore guard'] = 'IED';
+dict['Ignore Dff(300)'] = 'IED (300)';
+dict['Ignore Dff(380)'] = 'IED (380)';
 
 // ================= rules =================
 const rules = [

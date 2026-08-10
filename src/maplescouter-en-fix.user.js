@@ -204,7 +204,7 @@
   var MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // Single-char measure/label nodes that follow numeric inputs.
-  var UNIT_LABELS = { '성': '★', '회': 'time(s)', '개': 'pc(s)', '인': 'player(s)', '결과': 'Result', '없음': 'None' };
+  var UNIT_LABELS = { '성': '★', '회': 'time(s)', '개': 'pc(s)', '인': 'player(s)', '결과': 'Result', '없음': 'None', '만': '×10k', '억': '×100M', '배': '×' };
 
   // Built-in dynamic rules — run after dict/JSON rules miss.
   function builtinRules(t, d) {
@@ -217,6 +217,8 @@
     if (lv) return 'Lv ' + lv[1] + '~' + lv[2];
     var lv1 = t.match(/^(\d+)제$/);
     if (lv1) return 'Lv ' + lv1[1];
+    var arrow = t.match(/^(\d+)\s*→\s*(\d+)\s*레벨$/);
+    if (arrow) return 'Lv ' + arrow[1] + ' → ' + arrow[2];
     var bm = t.match(/^(.+?)\s*\(보약\)$/);
     if (bm) { var base = d.dict[bm[1].trim()]; if (base) return base + ' (Buffs)'; }
     var um = t.match(/^유저 정보\s*:\s*(.*)$/);
@@ -342,6 +344,7 @@
   }
 
   function processTree(root) {
+    if (pathLocale() !== 'en') return; // dormant on the Korean/Japanese/Chinese site
     if (root.nodeType === 3) { translateTextNode(root); return; }
     if (root.nodeType !== 1 && root.nodeType !== 11) return;
     var tag = root.nodeName;
@@ -368,9 +371,13 @@
   var observer = null;
 
   function startDomLayer() {
-    if (pathLocale() !== 'en') return; // only translate when the user is on the English site
+    if (observer) return;
+    // The observer is ALWAYS attached (even on /ko) so that switching language via
+    // the SPA selector — no page reload — still translates dynamically-mounted
+    // content like tooltips. All translate entry points no-op unless the path is /en.
     processTree(document.body);
     observer = new MutationObserver(function (muts) {
+      if (pathLocale() !== 'en') return;
       for (var i = 0; i < muts.length; i++) {
         var m = muts[i];
         if (m.type === 'characterData') translateTextNode(m.target);

@@ -28,3 +28,9 @@ div.px-2.py-4:has(.billboard-marquee-wrapper),
 div.relative:has(> .min-h-6 > .cursor-pointer[class*="bg-surface-primary-primary"]) {
   display: none !important;
 }
+
+/* Header: guarantee breathing room between the nav links and the search box
+   (English labels are wider than Korean and ended flush against it) */
+div.mx-auto.h-15.w-full.items-center.justify-between {
+  gap: 28px;
+}
