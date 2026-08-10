@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.0
+// @version      1.4.1
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -349,8 +349,15 @@
   // patch repo. Being a normal inline flex item, it never overlaps the header.
   var CREDIT_URL = 'https://github.com/tomerh2001/maplescouter-en-fix';
   function addCredit(link) {
-    var row = link.parentElement;
-    if (!row || row.querySelector('a.msfix-credit')) return;
+    // Position the credit absolutely, just under the logo wordmark. Anchored to the
+    // logo link's parent (a nested <a> would be invalid), so it reads as a subtitle
+    // of "MapleScouter" without being pushed to the header's center by justify-between.
+    var parent = link.parentElement;
+    if (!parent) return;
+    if (parent.querySelector('a.msfix-credit')) return;
+    if (!link.offsetHeight) return; // not laid out yet; try again next tick
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    var wordmark = link.querySelector('span');
     var a = document.createElement('a');
     a.className = 'msfix-credit';
     a.href = CREDIT_URL;
@@ -358,11 +365,14 @@
     a.rel = 'noopener noreferrer';
     a.textContent = 'Patched by Tomerh2001.com';
     a.title = 'English patch by tomerh2001 — click for the source';
-    a.style.cssText = 'align-self:flex-end;margin:0 0 3px 8px;font-size:10px;line-height:1;' +
-      'font-weight:600;opacity:0.55;white-space:nowrap;text-decoration:none;color:currentColor;flex:0 0 auto;';
+    a.style.cssText = 'position:absolute;z-index:5;pointer-events:auto;' +
+      'left:' + (link.offsetLeft + (wordmark ? wordmark.offsetLeft : 28)) + 'px;' +
+      'top:' + (link.offsetTop + link.offsetHeight - 3) + 'px;' +
+      'font-size:9px;line-height:1;font-weight:600;letter-spacing:0.2px;' +
+      'opacity:0.5;white-space:nowrap;text-decoration:none;color:currentColor;';
     a.addEventListener('mouseenter', function () { a.style.opacity = '0.9'; a.style.textDecoration = 'underline'; });
-    a.addEventListener('mouseleave', function () { a.style.opacity = '0.55'; a.style.textDecoration = 'none'; });
-    link.insertAdjacentElement('afterend', a);
+    a.addEventListener('mouseleave', function () { a.style.opacity = '0.5'; a.style.textDecoration = 'none'; });
+    parent.appendChild(a);
   }
 
   // Remove the (empty) Favorites bar under the search box — it reserves a large
