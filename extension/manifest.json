@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "MapleScouter English Fix",
+  "version": "1.3.5",
+  "description": "Complete English translations for maplescouter.com with GMS terminology, language & server memory, ad removal, and QoL fixes.",
+  "homepage_url": "https://github.com/tomerh2001/maplescouter-en-fix",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://maplescouter.com/*", "https://www.maplescouter.com/*"],
+      "js": ["msfix-data.js", "maplescouter-en-fix.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

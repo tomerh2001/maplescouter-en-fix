@@ -37,7 +37,7 @@ jobs:
 
       - name: Rebuild dist from data
         if: steps.exists.outputs.exists == 'false'
-        run: node build.js
+        run: node build.js && node build-extension.js
 
       - name: Create release
         if: steps.exists.outputs.exists == 'false'
@@ -48,6 +48,7 @@ jobs:
           gh release create "v$V" \
             dist/maplescouter-en-fix.user.js \
             dist/msfix-data.js \
+            dist/maplescouter-en-fix-extension.zip \
             --repo "$GITHUB_REPOSITORY" \
             --title "v$V" \
             --generate-notes

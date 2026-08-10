@@ -6,6 +6,10 @@ MapleScouter (환산주스탯 계산기) is the best MapleStory stat-equivalence
 
 ## Install
 
+**Option A — Chrome extension (unpacked or Web Store):** download `maplescouter-en-fix-extension.zip` from the [latest release](https://github.com/tomerh2001/maplescouter-en-fix/releases), unzip, and load it via chrome://extensions → Developer mode → "Load unpacked" (works in Chrome/Arc/Edge). Store publication steps live in [extension/STORE.md](extension/STORE.md).
+
+**Option B — Tampermonkey userscript:**
+
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (Chrome/Arc/Edge/Firefox/Safari).
 2. Click here: **[Install MapleScouter English Fix](https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js)** — Tampermonkey will show an install prompt.
 3. Open [maplescouter.com](https://maplescouter.com). Done.

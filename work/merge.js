@@ -143,6 +143,8 @@ const MANUAL = {
   '보스 배율 변경(마우스 호버 시 갱신 내용 확인)': 'Boss multiplier changed (hover to view update details)',
   // hexa page (site strings newer than the corpus snapshot)
   '다른 기준으로 보기': 'Change Criteria',
+  // HEXA node icon alt text (API-driven skill names; icons sometimes fail to load)
+  '프리드의 가호': "Freud's Wisdom",
   // boss burst-window popup
   '페이즈별 극딜 횟수(20분 기준)': 'Burst windows per phase (20-min basis)',
   '극딜': 'Full Burst',

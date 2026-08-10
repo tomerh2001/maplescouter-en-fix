@@ -8,3 +8,4 @@ work/recovered/
 work/home.html
 work/*.json
 !work/manifest.json
+dist-extension/
