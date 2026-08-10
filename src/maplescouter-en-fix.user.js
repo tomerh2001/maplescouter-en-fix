@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.0
+// @version      1.3.1
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -383,30 +383,53 @@
     }
     if (!saveBtn || !saveBtn.parentElement) return;
     var SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide h-4 w-4">';
-    var DOC = '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>';
     var ICONS = {
-      up: SVG_OPEN + DOC + '<path d="M12 18v-6"/><path d="m15 15-3-3-3 3"/></svg>',
-      down: SVG_OPEN + DOC + '<path d="M12 12v6"/><path d="m9 15 3 3 3-3"/></svg>'
+      // lucide "upload" — mirrors Save Preset's download-tray icon
+      export_: SVG_OPEN + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>',
+      // lucide "file-up" — mirrors Load Preset's file-down icon
+      import_: SVG_OPEN + '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="m15 15-3-3-3 3"/></svg>'
     };
     function mk(id, label, icon, handler) {
       var b = document.createElement('button');
       b.id = id;
       b.className = saveBtn.className;
       b.type = 'button';
-      b.innerHTML = '<span>' + label + '</span>' + icon;
+      b.appendChild(document.createTextNode(label)); // plain text node = identical typography
+      b.insertAdjacentHTML('beforeend', icon);
       b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); handler(); });
       return b;
     }
     var row = saveBtn.parentElement;
-    row.appendChild(mk('msfix-export-preset', 'Export Preset', ICONS.up, exportPreset));
-    row.appendChild(mk('msfix-import-preset', 'Import Preset', ICONS.down, importPreset));
-    // four buttons no longer fit next to the title — give the title its own line
-    var outer = row.parentElement;
-    if (outer && outer.className && outer.className.indexOf('justify-between') !== -1) {
-      outer.style.flexDirection = 'column';
-      outer.style.alignItems = 'flex-start';
-      outer.style.gap = '10px';
-      row.style.flexWrap = 'wrap';
+    row.appendChild(mk('msfix-export-preset', 'Export', ICONS.export_, exportPreset));
+    row.appendChild(mk('msfix-import-preset', 'Import', ICONS.import_, importPreset));
+    // compact the row so all four buttons share the title's line in the 500px panel
+    row.style.gap = '6px';
+    var all = row.querySelectorAll('button');
+    for (var k = 0; k < all.length; k++) {
+      all[k].style.paddingLeft = '8px';
+      all[k].style.paddingRight = '8px';
+      all[k].style.fontSize = '13px';
+    }
+  }
+
+  // Our longer English labels ("Genesis Liberated" etc.) can make the weapon-state
+  // checkbox row wrap — compact that row so all options stay on one line.
+  function compactCheckboxRows() {
+    var labels = document.querySelectorAll('label');
+    for (var i = 0; i < labels.length; i++) {
+      var t = labels[i].textContent.trim();
+      if (t !== 'Genesis Liberated' && t !== 'Mu Gong Soul') continue;
+      var row = labels[i].parentElement;
+      if (!row || row.__msfixCompact) continue;
+      row.__msfixCompact = true;
+      row.style.flexWrap = 'nowrap';
+      row.style.columnGap = '10px';
+      var ls = row.querySelectorAll('label');
+      for (var j = 0; j < ls.length; j++) {
+        ls[j].style.fontSize = '13px';
+        ls[j].style.whiteSpace = 'nowrap';
+        ls[j].style.gap = '6px';
+      }
     }
   }
 
@@ -655,8 +678,8 @@
     injectCss();
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); refreshFloatRects(); }, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); compactCheckboxRows(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); compactCheckboxRows(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();
