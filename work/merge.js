@@ -194,9 +194,9 @@ const OVERRIDES = {
   '격수 3인 최소컷': '3 DPS',
   '숍+격수2인 최소컷': '2 Players + B',
   '솔플 최소컷': 'Soloable-',
-  '파티 최소컷': 'Party-able-',
+  '파티 최소컷': 'Partyable-',
   '솔플 가능': 'Soloable',
-  '파티격 가능': 'Party-able',
+  '파티격 가능': 'Partyable',
   '솔플 여유컷': 'Soloable+',
   '입장 불가능': 'N/A',
   // compact party-percentage label on boss cards (bracketed form wrapped badly)
@@ -222,6 +222,9 @@ dict['Boss Dmg + Dmg%'] = 'Boss Damage + Damage';
 dict['Ignore guard'] = 'IED';
 dict['Ignore Dff(300)'] = 'IED (300)';
 dict['Ignore Dff(380)'] = 'IED (380)';
+// compact seconds unit for the inline cooldown field (en.json fold says 'Second')
+dict['초'] = 's';
+i18nPatch['초'] = 's';
 dict['Manual Input (Character Stats)'] = 'Manual Input';
 dict['Enter Directly (Character Stats Changes)'] = 'Manual Input';
 for (const [oldV, newV] of [
@@ -232,9 +235,9 @@ for (const [oldV, newV] of [
   ['3-DPS Min Spec', '3 DPS'], ['3-DPS Min', '3 DPS'],
   ['Bishop + 2 DPS Min Spec', '2 Players + B'], ['Bish+2 Min', '2 Players + B'],
   ['Solo Min Spec', 'Soloable-'], ['Solo Min', 'Soloable-'],
-  ['Party Min Spec', 'Party-able-'], ['Party Min', 'Party-able-'],
+  ['Party Min Spec', 'Partyable-'], ['Party Min', 'Partyable-'],
   ['Solo Viable', 'Soloable'], ['Solo OK', 'Soloable'],
-  ['Party Viable', 'Party-able'], ['Party OK', 'Party-able'],
+  ['Party Viable', 'Partyable'], ['Party OK', 'Partyable'],
   ['Solo Comfort Spec', 'Soloable+'], ['Comfy Solo', 'Soloable+'],
   ["Can't Enter", 'N/A'],
 ]) dict[oldV] = newV;

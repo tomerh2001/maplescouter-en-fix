@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.7
+// @version      1.4.0
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -306,21 +306,21 @@
     if (pathLocale() !== 'en') return;
     var d = data();
     var t = document.title;
-    if (!t || !HANGUL.test(t)) return;
-    var parts = t.split(/(\s[-|·]\s|\s\|\s|^\|\s?)/);
-    var changed = t.split(' - ').map(function (seg) {
-      return seg.split(' | ').map(function (piece) {
-        var s2 = piece.replace(/^\|\s*/, '').trim();
-        var hit = d.dict[s2];
-        if (hit != null) return hit;
-        if (s2 === '환산주스탯') return 'Maple Scouter';
-        // leading piece is often the searched character's name — leave names alone
-        return hangulRunPass(s2, d);
-      }).join(' | ');
+    if (!t) return;
+    var out = t.split(' - ').map(function (seg) {
+      var s = seg.replace(/^\s*\|\s*/, '').trim(); // some titles start with a stray "| "
+      var hit = d.dict[s];
+      if (hit != null) return hit;
+      if (/환산주스탯/.test(s)) return 'Maple Scouter';
+      return HANGUL.test(s) ? hangulRunPass(s, d) : s;
     }).join(' - ');
-    changed = changed.replace(/환산주스탯/g, 'Maple Scouter');
-    changed = changed.replace(/^Maple Scouter\s*[-|]\s*Maple Scouter$/, 'Maple Scouter');
-    if (changed !== t) document.title = changed;
+    out = out
+      .replace(/환산주스탯/g, 'Maple Scouter')
+      .replace(/Boss Cut\b/g, 'Boss Clear Spec')       // stale site title uses the old wording
+      .replace(/^\s*[|\-·∙]\s*/, '')                    // drop any leading separator
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (out && out !== t) document.title = out;
   }
 
   // The header logo is two spans reading 환산/주스탯 (the site's Korean brand).
@@ -343,22 +343,26 @@
     }
   }
 
-  // Small "EN patch by tomerh2001" subtitle tucked under the logo wordmark. It is
-  // absolutely positioned so it never changes the header's height or width, and
-  // React never manages it (we append our own node and re-add it after re-renders).
+  // A small clickable "Patched by Tomerh2001.com" credit placed as a sibling right
+  // after the logo link (nested <a> is invalid, so it can't go inside the logo). It
+  // sits inline in the header row, bottom-aligned like a subtitle, and links to the
+  // patch repo. Being a normal inline flex item, it never overlaps the header.
+  var CREDIT_URL = 'https://github.com/tomerh2001/maplescouter-en-fix';
   function addCredit(link) {
-    if (link.querySelector('.msfix-credit')) return;
-    var wordmark = link.querySelector('span');
-    if (!wordmark) return;
-    if (getComputedStyle(link).position === 'static') link.style.position = 'relative';
-    var credit = document.createElement('span');
-    credit.className = 'msfix-credit';
-    credit.textContent = 'EN patch by tomerh2001';
-    credit.style.cssText = 'position:absolute;top:100%;margin-top:-3px;' +
-      'left:' + Math.round(wordmark.offsetLeft) + 'px;' +
-      'font-size:9px;line-height:1;font-weight:500;letter-spacing:0.2px;' +
-      'opacity:0.5;white-space:nowrap;pointer-events:none;';
-    link.appendChild(credit);
+    var row = link.parentElement;
+    if (!row || row.querySelector('a.msfix-credit')) return;
+    var a = document.createElement('a');
+    a.className = 'msfix-credit';
+    a.href = CREDIT_URL;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = 'Patched by Tomerh2001.com';
+    a.title = 'English patch by tomerh2001 — click for the source';
+    a.style.cssText = 'align-self:flex-end;margin:0 0 3px 8px;font-size:10px;line-height:1;' +
+      'font-weight:600;opacity:0.55;white-space:nowrap;text-decoration:none;color:currentColor;flex:0 0 auto;';
+    a.addEventListener('mouseenter', function () { a.style.opacity = '0.9'; a.style.textDecoration = 'underline'; });
+    a.addEventListener('mouseleave', function () { a.style.opacity = '0.55'; a.style.textDecoration = 'none'; });
+    link.insertAdjacentElement('afterend', a);
   }
 
   // Remove the (empty) Favorites bar under the search box — it reserves a large
@@ -523,8 +527,8 @@
     '2 Players + B': 'Minimum spec for 2 DPS plus a Bishop',
     'Soloable-': 'Bare minimum spec to solo this boss',
     'Soloable+': 'You can comfortably solo this boss',
-    'Party-able': 'You can clear this boss in a party (as DPS)',
-    'Party-able-': 'Minimum spec to clear in a party',
+    'Partyable': 'You can clear this boss in a party (as DPS)',
+    'Partyable-': 'Minimum spec to clear in a party',
     'Soloable': 'You can solo this boss',
     'N/A': "Below this boss's entry requirements"
   };
@@ -559,14 +563,19 @@
 
   var INLINE_TAGS = { BR: 1, SPAN: 1, B: 1, STRONG: 1, I: 1, EM: 1 };
 
+  // Per-element replacement counter. Replacing textContent nukes React's child
+  // spans; on a live-updating page React restores the Korean and we would replace
+  // again — an infinite loop that freezes the tab. Capping attempts breaks it.
+  var elAttempts = new WeakMap();
+
   function tryElementTranslate(el, d) {
-    if (el.__msfixElDone) return;
     var kids = el.children;
-    if (kids.length > 10) return;
+    if (kids.length > 8) return;
     for (var i = 0; i < kids.length; i++) if (!INLINE_TAGS[kids[i].tagName]) return;
     var txt = el.textContent;
     if (!txt || txt.length < 8 || txt.length > 500 || !HANGUL.test(txt)) return;
-    el.__msfixElDone = true;
+    var tries = elAttempts.get(el) || 0;
+    if (tries >= 2) return; // stop fighting a React re-render
     var idx = normIndex(d);
     var key = normKey(txt);
     var hit = idx[key];
@@ -575,7 +584,7 @@
       var h0 = idx[key.slice(0, -1)];
       if (h0 != null) hit = h0 + (/\([^)]*$/.test(h0) ? ')' : '');
     }
-    if (hit) el.textContent = hit;
+    if (hit && hit !== txt) { el.textContent = hit; elAttempts.set(el, tries + 1); }
   }
 
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
@@ -616,10 +625,13 @@
         return NodeFilter.FILTER_ACCEPT;
       }
     });
+    // Bound the work of a single (possibly huge) subtree so one processTree call
+    // can never pin the CPU — a giant modal gets partial translation, not a freeze.
+    var MAX = 2500, budget = MAX;
     if (root.nodeType === 1) tryElementTranslate(root, d);
-    while (ew.nextNode()) tryElementTranslate(ew.currentNode, d);
-    var nodes = [];
-    while (walker.nextNode()) nodes.push(walker.currentNode);
+    while (budget-- > 0 && ew.nextNode()) tryElementTranslate(ew.currentNode, d);
+    var nodes = [], tbudget = MAX;
+    while (tbudget-- > 0 && walker.nextNode()) nodes.push(walker.currentNode);
     for (var i = 0; i < nodes.length; i++) translateTextNode(nodes[i]);
     if (root.querySelectorAll) {
       if (root.nodeType === 1) translateAttrs(root);
@@ -629,29 +641,68 @@
   }
 
   var observer = null;
+  // Mutations are queued and drained during idle time with a time budget, rather
+  // than processed synchronously inside the observer callback. On data-heavy pages
+  // (e.g. the boss result page) React fires a torrent of mutations; processing them
+  // inline froze the tab. Idle-time draining keeps the page responsive.
+  var qAdded = new Set(), qChar = new Set(), qAttr = new Set(), qRemoved = [];
+  var flushScheduled = false;
+  var scheduleImpl = window.requestIdleCallback
+    ? function (f) { window.requestIdleCallback(f, { timeout: 400 }); }
+    : function (f) { setTimeout(function () { f({ timeRemaining: function () { return 8; } }); }, 50); };
+
+  function scheduleFlush() { if (!flushScheduled) { flushScheduled = true; scheduleImpl(flush); } }
+
+  function flush(deadline) {
+    flushScheduled = false;
+    // tooltip pinning must react to removals regardless of locale
+    for (var r = 0; r < qRemoved.length; r++) onFloatingRemoved(qRemoved[r]);
+    qRemoved.length = 0;
+    var en = pathLocale() === 'en';
+    if (!en) { qAdded.clear(); qChar.clear(); qAttr.clear(); return; }
+    var start = Date.now();
+    var hasTime = function () { return deadline && deadline.timeRemaining ? deadline.timeRemaining() > 3 : Date.now() - start < 25; };
+    observer.disconnect(); // don't let our own writes re-trigger us
+    try {
+      var added = []; qAdded.forEach(function (n) { added.push(n); }); qAdded.clear();
+      var ai = 0;
+      for (; ai < added.length; ai++) { trackFloating(added[ai]); processTree(added[ai]); if (!hasTime()) { ai++; break; } }
+      for (; ai < added.length; ai++) qAdded.add(added[ai]);
+      if (hasTime()) {
+        var chars = []; qChar.forEach(function (n) { chars.push(n); }); qChar.clear();
+        var ci = 0;
+        for (; ci < chars.length; ci++) { translateTextNode(chars[ci]); if (!hasTime()) { ci++; break; } }
+        for (; ci < chars.length; ci++) qChar.add(chars[ci]);
+      }
+      if (hasTime()) {
+        var attrs = []; qAttr.forEach(function (n) { attrs.push(n); }); qAttr.clear();
+        var xi = 0;
+        for (; xi < attrs.length; xi++) { if (attrs[xi].nodeType === 1) translateAttrs(attrs[xi]); if (!hasTime()) { xi++; break; } }
+        for (; xi < attrs.length; xi++) qAttr.add(attrs[xi]);
+      }
+      fixLogo();
+    } catch (e) {} finally {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
+    }
+    if (qAdded.size || qChar.size || qAttr.size) scheduleFlush();
+  }
 
   function startDomLayer() {
     if (observer) return;
     // The observer is ALWAYS attached (even on /ko) so that switching language via
     // the SPA selector — no page reload — still translates dynamically-mounted
-    // content like tooltips. All translate entry points no-op unless the path is /en.
+    // content. All translate entry points no-op unless the path is /en.
     processTree(document.body);
     observer = new MutationObserver(function (muts) {
-      var en = pathLocale() === 'en';
       for (var i = 0; i < muts.length; i++) {
         var m = muts[i];
         if (m.type === 'childList') {
-          for (var k = 0; k < m.removedNodes.length; k++) onFloatingRemoved(m.removedNodes[k]);
-          for (var j = 0; j < m.addedNodes.length; j++) {
-            trackFloating(m.addedNodes[j]);
-            if (en) processTree(m.addedNodes[j]);
-          }
-        }
-        if (!en) continue;
-        if (m.type === 'characterData') translateTextNode(m.target);
-        else if (m.type === 'attributes' && m.target.nodeType === 1) translateAttrs(m.target);
+          for (var k = 0; k < m.removedNodes.length; k++) qRemoved.push(m.removedNodes[k]);
+          for (var j = 0; j < m.addedNodes.length; j++) qAdded.add(m.addedNodes[j]);
+        } else if (m.type === 'characterData') qChar.add(m.target);
+        else if (m.type === 'attributes') qAttr.add(m.target);
       }
-      if (en) fixLogo(); // React re-renders restore the Korean logo spans; keep it rebranded
+      scheduleFlush();
     });
     observer.observe(document.body, {
       childList: true, subtree: true, characterData: true,

@@ -34,3 +34,27 @@ div.relative:has(> .min-h-6 > .cursor-pointer[class*="bg-surface-primary-primary
 div.mx-auto.h-15.w-full.items-center.justify-between {
   gap: 28px;
 }
+
+/* Character-look art scaled 300% (bg-cover) that overflows its card and floats
+   across the page — hide it; it is purely decorative. */
+div.scale-300.bg-cover.bg-center,
+div[class*="scale-300"][style*="character/look"] {
+  display: none !important;
+}
+
+/* Also collapse the wrapper div around sponsor/ad banners so no empty gap remains */
+div:has(> a[href*="boomback.com"]),
+div:has(> a[href*="boomback.com"] > img),
+div:has(> a > img[src*="/next/ads/"]) {
+  display: none !important;
+}
+
+/* Broken HEXA / skill icon images (Nexon sometimes fails to serve new icons) render
+   their alt text, which overflows the tiny node box. Hide the alt text so a clean
+   empty node remains (its level badge still shows). */
+img[alt^="hexa" i], img[alt^="HEXA" i] {
+  color: transparent !important;
+  font-size: 0 !important;
+  text-indent: -9999px !important;
+  overflow: hidden !important;
+}
