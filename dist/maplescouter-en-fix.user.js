@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.2
+// @version      1.4.3
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -343,36 +343,36 @@
     }
   }
 
-  // A small clickable "Patched by Tomerh2001" credit placed as a sibling right
-  // after the logo link (nested <a> is invalid, so it can't go inside the logo). It
-  // sits inline in the header row, bottom-aligned like a subtitle, and links to the
-  // patch repo. Being a normal inline flex item, it never overlaps the header.
+  // "Patched by Tomerh2001" as a real second line inside the logo link. flex-wrap +
+  // flex-basis:100% pushes it onto its own row directly under the wordmark (no absolute
+  // positioning, so it can never overlap), indented to line up under the text. It is a
+  // <span> (a nested <a> is invalid) with a click handler that opens the repo; every
+  // size/weight/opacity is forced with !important so the site's CSS can't inflate it.
   var CREDIT_URL = 'https://github.com/tomerh2001/maplescouter-en-fix';
   function addCredit(link) {
-    // Position the credit absolutely, just under the logo wordmark. Anchored to the
-    // logo link's parent (a nested <a> would be invalid), so it reads as a subtitle
-    // of "MapleScouter" without being pushed to the header's center by justify-between.
-    var parent = link.parentElement;
-    if (!parent) return;
-    if (parent.querySelector('a.msfix-credit')) return;
-    if (!link.offsetHeight) return; // not laid out yet; try again next tick
-    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    if (link.querySelector('.msfix-credit')) return;
+    if (!link.offsetHeight) return; // not laid out yet; retry next tick
     var wordmark = link.querySelector('span');
-    var a = document.createElement('a');
-    a.className = 'msfix-credit';
-    a.href = CREDIT_URL;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.textContent = 'Patched by Tomerh2001';
-    a.title = 'English patch by tomerh2001 — click for the source';
-    a.style.cssText = 'position:absolute;z-index:5;pointer-events:auto;' +
-      'left:' + (link.offsetLeft + (wordmark ? wordmark.offsetLeft : 28)) + 'px;' +
-      'top:' + (link.offsetTop + link.offsetHeight - 3) + 'px;' +
-      'font-size:9px;line-height:1;font-weight:600;letter-spacing:0.2px;' +
-      'opacity:0.5;white-space:nowrap;text-decoration:none;color:currentColor;';
-    a.addEventListener('mouseenter', function () { a.style.opacity = '0.9'; a.style.textDecoration = 'underline'; });
-    a.addEventListener('mouseleave', function () { a.style.opacity = '0.5'; a.style.textDecoration = 'none'; });
-    parent.appendChild(a);
+    var indent = wordmark ? wordmark.offsetLeft : 30;
+    link.style.flexWrap = 'wrap';
+    link.style.rowGap = '0px';
+    var s = document.createElement('span');
+    s.className = 'msfix-credit';
+    s.textContent = 'Patched by Tomerh2001';
+    s.title = 'English patch by tomerh2001 — click for the source';
+    s.style.cssText = 'flex-basis:100%;width:100%;white-space:nowrap;cursor:pointer;' +
+      'margin-left:' + indent + 'px;margin-top:-2px;text-decoration:none;';
+    var force = function (k, v) { s.style.setProperty(k, v, 'important'); };
+    force('font-size', '9px');
+    force('line-height', '1');
+    force('font-weight', '600');
+    force('letter-spacing', '0.4px');
+    force('opacity', '0.45');
+    force('color', 'currentColor');
+    s.addEventListener('mouseenter', function () { force('opacity', '0.8'); s.style.textDecoration = 'underline'; });
+    s.addEventListener('mouseleave', function () { force('opacity', '0.45'); s.style.textDecoration = 'none'; });
+    s.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.open(CREDIT_URL, '_blank', 'noopener'); });
+    link.appendChild(s);
   }
 
   // Remove the (empty) Favorites bar under the search box — it reserves a large
