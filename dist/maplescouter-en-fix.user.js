@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.6
+// @version      1.3.7
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -330,15 +330,35 @@
     // every header link that wraps the logo image (desktop + mobile variants)
     var links = document.querySelectorAll('header a');
     for (var i = 0; i < links.length; i++) {
-      if (!links[i].querySelector('img[alt="logo"], img[src*="logo"]')) continue;
-      var spans = links[i].querySelectorAll('span');
+      var link = links[i];
+      if (!link.querySelector('img[alt="logo"], img[src*="logo"]')) continue;
+      var spans = link.querySelectorAll('span');
       if (spans.length >= 2) {
         if (spans[0].textContent !== 'Maple ') spans[0].textContent = 'Maple ';
         if (spans[1].textContent !== 'Scouter') spans[1].textContent = 'Scouter';
       } else if (spans.length === 1 && spans[0].textContent !== 'Maple Scouter') {
         spans[0].textContent = 'Maple Scouter';
       }
+      addCredit(link);
     }
+  }
+
+  // Small "EN patch by tomerh2001" subtitle tucked under the logo wordmark. It is
+  // absolutely positioned so it never changes the header's height or width, and
+  // React never manages it (we append our own node and re-add it after re-renders).
+  function addCredit(link) {
+    if (link.querySelector('.msfix-credit')) return;
+    var wordmark = link.querySelector('span');
+    if (!wordmark) return;
+    if (getComputedStyle(link).position === 'static') link.style.position = 'relative';
+    var credit = document.createElement('span');
+    credit.className = 'msfix-credit';
+    credit.textContent = 'EN patch by tomerh2001';
+    credit.style.cssText = 'position:absolute;top:100%;margin-top:-3px;' +
+      'left:' + Math.round(wordmark.offsetLeft) + 'px;' +
+      'font-size:9px;line-height:1;font-weight:500;letter-spacing:0.2px;' +
+      'opacity:0.5;white-space:nowrap;pointer-events:none;';
+    link.appendChild(credit);
   }
 
   // Remove the (empty) Favorites bar under the search box — it reserves a large
