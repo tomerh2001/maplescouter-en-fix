@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.1.1
+// @version      1.2.0
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -328,6 +328,74 @@
     }
   }
 
+  /* ---------------- 4c. Preset export / import ------------------------------------------ */
+  // The site keeps manual-input state and named presets in localStorage. These two
+  // buttons let you back them up to a file and restore them on any browser/device.
+  var PRESET_KEYS = ['character-store', 'preset'];
+
+  function exportPreset() {
+    var payload = { app: 'maplescouter-en-fix', type: 'preset-export', v: 1, exportedAt: new Date().toISOString(), data: {} };
+    for (var i = 0; i < PRESET_KEYS.length; i++) {
+      var v = null;
+      try { v = localStorage.getItem(PRESET_KEYS[i]); } catch (e) {}
+      if (v != null) payload.data[PRESET_KEYS[i]] = v;
+    }
+    var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'maplescouter-preset-' + payload.exportedAt.slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  }
+
+  function importPreset() {
+    var inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json';
+    inp.onchange = function () {
+      var f = inp.files && inp.files[0];
+      if (!f) return;
+      f.text().then(function (txt) {
+        var p;
+        try { p = JSON.parse(txt); } catch (e) { p = null; }
+        if (!p || p.type !== 'preset-export' || !p.data || typeof p.data !== 'object') {
+          alert('This is not a valid MapleScouter preset file.');
+          return;
+        }
+        for (var k in p.data) {
+          if (PRESET_KEYS.indexOf(k) !== -1 && typeof p.data[k] === 'string') localStorage.setItem(k, p.data[k]);
+        }
+        location.reload();
+      });
+    };
+    inp.click();
+  }
+
+  function ensurePresetButtons() {
+    if (document.getElementById('msfix-export-preset')) return;
+    var buttons = document.querySelectorAll('button');
+    var saveBtn = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var t = buttons[i].textContent.trim();
+      if (t === 'Save Preset' || t === '프리셋 저장') { saveBtn = buttons[i]; break; }
+    }
+    if (!saveBtn || !saveBtn.parentElement) return;
+    function mk(id, label, handler) {
+      var b = document.createElement('button');
+      b.id = id;
+      b.className = saveBtn.className;
+      b.type = 'button';
+      b.textContent = label;
+      b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); handler(); });
+      return b;
+    }
+    var row = saveBtn.parentElement;
+    row.appendChild(mk('msfix-export-preset', 'Export Preset', exportPreset));
+    row.appendChild(mk('msfix-import-preset', 'Import Preset', importPreset));
+  }
+
   // The homepage update-history table is Korean-only API content that cannot be
   // statically translated — hide it in English mode rather than show raw Korean.
   function hideKoreanChangelog() {
@@ -570,8 +638,8 @@
     injectCss();
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); refreshFloatRects(); }, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();

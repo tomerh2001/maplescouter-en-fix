@@ -176,6 +176,7 @@ const OVERRIDES = {
   '방무%': 'IED %',
   '방무(300)': 'IED (300)',
   '방무(380)': 'IED (380)',
+  '직접 입력': 'Manual Input',
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
 for (const n of NICKNAMES) { delete dict[n]; }
@@ -193,6 +194,8 @@ dict['Boss Dmg + Dmg%'] = 'Boss Damage + Damage';
 dict['Ignore guard'] = 'IED';
 dict['Ignore Dff(300)'] = 'IED (300)';
 dict['Ignore Dff(380)'] = 'IED (380)';
+dict['Manual Input (Character Stats)'] = 'Manual Input';
+dict['Enter Directly (Character Stats Changes)'] = 'Manual Input';
 
 // ================= rules =================
 const rules = [
