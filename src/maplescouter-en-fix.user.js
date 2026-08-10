@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.3
+// @version      1.4.4
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -343,34 +343,44 @@
     }
   }
 
-  // "Patched by Tomerh2001" as a real second line inside the logo link. flex-wrap +
-  // flex-basis:100% pushes it onto its own row directly under the wordmark (no absolute
-  // positioning, so it can never overlap), indented to line up under the text. It is a
-  // <span> (a nested <a> is invalid) with a click handler that opens the repo; every
-  // size/weight/opacity is forced with !important so the site's CSS can't inflate it.
+  // "Patched by Tomerh2001" tucked under the logo wordmark. It is positioned
+  // ABSOLUTELY, anchored to the logo link itself (which we make position:relative),
+  // so it is taken out of flow — the header's flex/justify-between layout, and its
+  // responsive variants, can never move it, center it, or resize the row. left is
+  // the wordmark's own offset (aligns under the text, past the icon); top:100% sits
+  // it just below the logo. It is a <span> (a nested <a> is invalid) with a click
+  // handler opening the repo, and every size/weight is forced with !important so the
+  // site's CSS cannot inflate it. Re-applied after React re-renders by fixLogo().
   var CREDIT_URL = 'https://github.com/tomerh2001/maplescouter-en-fix';
   function addCredit(link) {
     if (link.querySelector('.msfix-credit')) return;
-    if (!link.offsetHeight) return; // not laid out yet; retry next tick
+    if (!link.offsetHeight || !link.offsetWidth) return; // not laid out yet; retry next tick
+    link.style.removeProperty('flex-wrap'); // undo any earlier-version wrapping
+    if (getComputedStyle(link).position === 'static') link.style.position = 'relative';
     var wordmark = link.querySelector('span');
-    var indent = wordmark ? wordmark.offsetLeft : 30;
-    link.style.flexWrap = 'wrap';
-    link.style.rowGap = '0px';
+    var indent = wordmark ? wordmark.offsetLeft : 28;
     var s = document.createElement('span');
     s.className = 'msfix-credit';
     s.textContent = 'Patched by Tomerh2001';
     s.title = 'English patch by tomerh2001 — click for the source';
-    s.style.cssText = 'flex-basis:100%;width:100%;white-space:nowrap;cursor:pointer;' +
-      'margin-left:' + indent + 'px;margin-top:-2px;text-decoration:none;';
     var force = function (k, v) { s.style.setProperty(k, v, 'important'); };
+    force('position', 'absolute');
+    force('left', indent + 'px');
+    force('top', '100%');
+    force('margin-top', '2px');
     force('font-size', '9px');
     force('line-height', '1');
     force('font-weight', '600');
     force('letter-spacing', '0.4px');
     force('opacity', '0.45');
     force('color', 'currentColor');
-    s.addEventListener('mouseenter', function () { force('opacity', '0.8'); s.style.textDecoration = 'underline'; });
-    s.addEventListener('mouseleave', function () { force('opacity', '0.45'); s.style.textDecoration = 'none'; });
+    force('white-space', 'nowrap');
+    force('cursor', 'pointer');
+    force('pointer-events', 'auto');
+    force('z-index', '2');
+    force('text-decoration', 'none');
+    s.addEventListener('mouseenter', function () { force('opacity', '0.85'); force('text-decoration', 'underline'); });
+    s.addEventListener('mouseleave', function () { force('opacity', '0.45'); force('text-decoration', 'none'); });
     s.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.open(CREDIT_URL, '_blank', 'noopener'); });
     link.appendChild(s);
   }
