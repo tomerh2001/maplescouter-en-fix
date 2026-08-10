@@ -202,6 +202,10 @@ const OVERRIDES = {
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
 for (const n of NICKNAMES) { delete dict[n]; }
+// the site's DEMO characters appear in prose ("User Info: ... / 으낭다") — romanize
+// those two names for English readers; real player IGNs stay untouched.
+dict['고마오'] = 'Gomao';
+dict['으낭다'] = 'Eunangda';
 // also fix any English strings already rendered by the site's own table
 dict['Liberation'] = 'Genesis Liberated';
 dict['First Legacy'] = 'Destiny Liberated';
