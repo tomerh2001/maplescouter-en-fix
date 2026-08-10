@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.3
+// @version      1.3.4
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -504,7 +504,8 @@
     'Soloable-': 'Bare minimum spec to solo this boss',
     'Soloable+': 'You can comfortably solo this boss',
     'Party-able': 'You can clear this boss in a party (as DPS)',
-    'Party Min': 'Minimum spec to clear in a party',
+    'Party-able-': 'Minimum spec to clear in a party',
+    'Soloable': 'You can solo this boss',
     'N/A': "Below this boss's entry requirements"
   };
 
