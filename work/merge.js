@@ -90,6 +90,9 @@ for (const [ko, en] of fixes) i18nPatch[ko] = en;
 for (const k of Object.keys(i18nPatch)) {
   if (!i18nPatch[k] || i18nPatch[k] === k || i18nPatch[k] === enTable[k]) delete i18nPatch[k];
 }
+// player/author nicknames that leaked into the corpus as code literals — never translate
+const NICKNAMES = ['고마오', '으낭다', '예띰', '비숍링크부들'];
+for (const n of NICKNAMES) { delete i18nPatch[n]; }
 
 // ================= DOM dictionary =================
 const dict = {};
@@ -134,6 +137,11 @@ const MANUAL = {
   '내 장비 또는 보관함에서 장비를 클릭하면 해당 장비의 옵션이 초기값으로 적용됩니다.': 'Click an item in My Equipment or the Locker to load its options as the starting values.',
   // hexa page (site strings newer than the corpus snapshot)
   '다른 기준으로 보기': 'Change Criteria',
+  // boss burst-window popup
+  '페이즈별 극딜 횟수(20분 기준)': 'Burst windows per phase (20-min basis)',
+  '극딜': 'Full Burst',
+  '준극딜': 'Semi Burst',
+  '어센': 'Ascent',
   '추천 템환산': 'Recommended Item Equiv.',
   // hexa tooltip fragments (split across styled spans, matched trimmed)
   '기운': 'Energy',
@@ -170,6 +178,7 @@ const OVERRIDES = {
   '방무(380)': 'IED (380)',
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
+for (const n of NICKNAMES) { delete dict[n]; }
 // also fix any English strings already rendered by the site's own table
 dict['Liberation'] = 'Genesis Liberated';
 dict['First Legacy'] = 'Destiny Liberated';

@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/maplescouter-en-fix.user.js'
+      - 'data/**'
+      - 'dist/**'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract userscript version
+        id: ver
+        run: |
+          V=$(grep -m1 '@version' src/maplescouter-en-fix.user.js | awk '{print $NF}')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: $V"
+
+      - name: Check if release already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild dist from data
+        if: steps.exists.outputs.exists == 'false'
+        run: node build.js
+
+      - name: Create release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          gh release create "v$V" \
+            dist/maplescouter-en-fix.user.js \
+            dist/msfix-data.js \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "v$V" \
+            --generate-notes

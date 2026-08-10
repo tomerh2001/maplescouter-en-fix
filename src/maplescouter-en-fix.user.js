@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.0.0
+// @version      1.1.0
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -219,6 +219,9 @@
     if (lv1) return 'Lv ' + lv1[1];
     var arrow = t.match(/^(\d+)\s*→\s*(\d+)\s*레벨$/);
     if (arrow) return 'Lv ' + arrow[1] + ' → ' + arrow[2];
+    // "3극 4준(3어센)" = burst-window counts: N full bursts / M semi-bursts (K Ascent uses)
+    var burst = t.match(/^(\d+)극\s*(\d+)준(?:\((\d+)어센\))?$/);
+    if (burst) return burst[1] + ' full / ' + burst[2] + ' semi burst' + (burst[3] ? ' (' + burst[3] + ' Ascent)' : '');
     var bm = t.match(/^(.+?)\s*\(보약\)$/);
     if (bm) { var base = d.dict[bm[1].trim()]; if (base) return base + ' (Buffs)'; }
     var um = t.match(/^유저 정보\s*:\s*(.*)$/);
@@ -277,9 +280,14 @@
     if (!t || !HANGUL.test(t)) return;
     var parts = t.split(/(\s[-|·]\s|\s\|\s|^\|\s?)/);
     var changed = t.split(' - ').map(function (seg) {
-      var s2 = seg.replace(/^\|\s*/, '');
-      var hit = d.dict[s2.trim()];
-      return hit != null ? hit : (s2 === '환산주스탯' ? 'Maple Scouter' : hangulRunPass(s2, d));
+      return seg.split(' | ').map(function (piece) {
+        var s2 = piece.replace(/^\|\s*/, '').trim();
+        var hit = d.dict[s2];
+        if (hit != null) return hit;
+        if (s2 === '환산주스탯') return 'Maple Scouter';
+        // leading piece is often the searched character's name — leave names alone
+        return hangulRunPass(s2, d);
+      }).join(' | ');
     }).join(' - ');
     changed = changed.replace(/환산주스탯/g, 'Maple Scouter');
     changed = changed.replace(/^Maple Scouter\s*[-|]\s*Maple Scouter$/, 'Maple Scouter');
@@ -323,9 +331,22 @@
     }
   }
 
+  // Character/player names must never be translated. Names appear inside links to
+  // /info?name=X and in the live-search ticker rows — skip those contexts entirely.
+  function isPlayerNameContext(node) {
+    var p = node.parentElement;
+    for (var i = 0; i < 5 && p; i++, p = p.parentElement) {
+      if (p.tagName === 'A' && /[?&]name=/.test(p.getAttribute('href') || '')) return true;
+      var cls = (p.className || '').toString();
+      if (cls.indexOf('text-mini') !== -1 && cls.indexOf('h-6') !== -1) return true;
+    }
+    return false;
+  }
+
   function translateTextNode(node) {
     var v = node.nodeValue;
     if (!v) return;
+    if (HANGUL.test(v) && isPlayerNameContext(node)) return;
     var r = translateString(v);
     if (r != null && r !== v) node.nodeValue = r;
   }
@@ -377,21 +398,97 @@
     // content like tooltips. All translate entry points no-op unless the path is /en.
     processTree(document.body);
     observer = new MutationObserver(function (muts) {
-      if (pathLocale() !== 'en') return;
+      var en = pathLocale() === 'en';
       for (var i = 0; i < muts.length; i++) {
         var m = muts[i];
+        if (m.type === 'childList') {
+          for (var k = 0; k < m.removedNodes.length; k++) onFloatingRemoved(m.removedNodes[k]);
+          for (var j = 0; j < m.addedNodes.length; j++) {
+            trackFloating(m.addedNodes[j]);
+            if (en) processTree(m.addedNodes[j]);
+          }
+        }
+        if (!en) continue;
         if (m.type === 'characterData') translateTextNode(m.target);
         else if (m.type === 'attributes' && m.target.nodeType === 1) translateAttrs(m.target);
-        else {
-          for (var j = 0; j < m.addedNodes.length; j++) processTree(m.addedNodes[j]);
-        }
       }
-      fixLogo(); // React re-renders restore the Korean logo spans; keep it rebranded
+      if (en) fixLogo(); // React re-renders restore the Korean logo spans; keep it rebranded
     });
     observer.observe(document.body, {
       childList: true, subtree: true, characterData: true,
       attributes: true, attributeFilter: ATTRS
     });
+  }
+
+  /* ---------------- 4a. Tooltip keep-alive ---------------------------------------------- */
+  // Some site tooltips (boss hover cards etc.) close the moment the pointer enters
+  // them. If a floating layer is removed while the cursor is inside its box, we pin
+  // a static clone in place until the mouse genuinely leaves it.
+  var mouse = { x: -1, y: -1 };
+  document.addEventListener('mousemove', function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, true);
+
+  var FLOAT_SELECTOR = '[data-radix-popper-content-wrapper], [role="tooltip"], [data-side][data-state]';
+  var floatRects = new Map(); // element -> DOMRect (last known)
+  var pinned = null;
+
+  function trackFloating(root) {
+    if (!root || root.nodeType !== 1) return;
+    var els = [];
+    if (root.matches && root.matches(FLOAT_SELECTOR)) els.push(root);
+    if (root.querySelectorAll) els.push.apply(els, root.querySelectorAll(FLOAT_SELECTOR));
+    for (var i = 0; i < els.length; i++) {
+      var r = els[i].getBoundingClientRect();
+      if (r.height > 60 && r.width > 100) floatRects.set(els[i], r);
+    }
+  }
+
+  function refreshFloatRects() {
+    floatRects.forEach(function (_, el) {
+      if (!document.contains(el)) { floatRects.delete(el); return; }
+      var r = el.getBoundingClientRect();
+      if (r.height > 0) floatRects.set(el, r);
+    });
+  }
+
+  function insideRect(r, pad) {
+    return mouse.x >= r.left - pad && mouse.x <= r.right + pad && mouse.y >= r.top - pad && mouse.y <= r.bottom + pad;
+  }
+
+  function unpin() {
+    if (pinned) { pinned.el.remove(); document.removeEventListener('mousemove', pinned.watch, true); pinned = null; }
+  }
+
+  function pinTooltip(node, r) {
+    unpin();
+    var clone = node.cloneNode(true);
+    clone.id = 'msfix-pinned-tooltip';
+    clone.style.position = 'fixed';
+    clone.style.left = r.left + 'px';
+    clone.style.top = r.top + 'px';
+    clone.style.zIndex = '2147483000';
+    clone.style.pointerEvents = 'auto';
+    clone.style.margin = '0';
+    clone.style.transform = 'none';
+    document.body.appendChild(clone);
+    var watch = function () {
+      if (!insideRect(r, 14)) unpin();
+    };
+    pinned = { el: clone, watch: watch };
+    document.addEventListener('mousemove', watch, true);
+    window.addEventListener('scroll', unpin, { once: true, capture: true });
+  }
+
+  function onFloatingRemoved(node) {
+    if (node.nodeType !== 1) return;
+    var candidates = [node];
+    floatRects.forEach(function (_, el) { if (node === el || node.contains(el)) candidates.push(el); });
+    for (var i = 0; i < candidates.length; i++) {
+      var r = floatRects.get(candidates[i]);
+      if (r) {
+        floatRects.delete(candidates[i]);
+        if (insideRect(r, 6)) { pinTooltip(candidates[i], r); return; }
+      }
+    }
   }
 
   /* ---------------- 4b. Ad removal ------------------------------------------------------ */
@@ -458,7 +555,7 @@
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
     setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); }, 2000);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();
