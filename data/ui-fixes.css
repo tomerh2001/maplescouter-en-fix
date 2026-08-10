@@ -10,3 +10,21 @@ span.text-text-gray-high.w-full.truncate.text-sm.font-medium {
   font-size: 12.5px !important;
   word-break: keep-all;
 }
+
+/* ---------- Ad removal ---------- */
+/* Venatus ad slots + their reserved-height wrappers */
+[id^="slot-"],
+div:has(> [id^="slot-"]) {
+  display: none !important;
+}
+/* Sponsor banners (Boomback etc.) and any /next/ads/ creatives */
+a[href*="boomback.com"],
+a:has(> img[src*="/next/ads/"]),
+img[src*="/next/ads/"] {
+  display: none !important;
+}
+/* NOTICE bar (rotating sponsored billboard / promo marquee) — both page variants */
+div.px-2.py-4:has(.billboard-marquee-wrapper),
+div.relative:has(> .min-h-6 > .cursor-pointer[class*="bg-surface-primary-primary"]) {
+  display: none !important;
+}

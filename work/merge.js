@@ -129,6 +129,25 @@ const MANUAL = {
 };
 for (const [k, v] of Object.entries(MANUAL)) if (!dict[k]) dict[k] = v;
 
+// hard overrides (user-requested wording) — applied to BOTH layers, win over everything
+const OVERRIDES = {
+  // input-page weapon state toggles: 해방 = Genesis weapon liberated, 최초의 유산 = Destiny weapon liberated
+  '해방': 'Genesis Liberated',
+  '최초의 유산': 'Destiny Liberated',
+  // top-nav labels: English was too wide and collided with the header search box
+  '분석&최적화': 'Analysis',
+  '랭킹&챌린지': 'Rankings',
+  '정보센터': 'Info Center',
+};
+for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
+// also fix any English strings already rendered by the site's own table
+dict['Liberation'] = 'Genesis Liberated';
+dict['First Legacy'] = 'Destiny Liberated';
+dict['Analysis / Optimization'] = 'Analysis';
+dict['Analysis&Optimization'] = 'Analysis';
+dict['Ranking&Challenge'] = 'Rankings';
+dict['Information Center'] = 'Info Center';
+
 // ================= rules =================
 const rules = [
   ['^([\\d,]+)\\s*자 이하로 입력해주세요\\.?$', '', 'Max $1 characters.'],

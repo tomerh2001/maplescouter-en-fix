@@ -288,14 +288,36 @@
   // Rebrand to the site's own English name instead of a literal translation.
   function fixLogo() {
     if (pathLocale() !== 'en') return;
-    var link = document.querySelector('header a[href="/"], header a[href^="/en"]');
-    if (!link) return;
-    var spans = link.querySelectorAll('span');
-    if (spans.length >= 2 && spans[0].textContent !== 'Maple') {
-      spans[0].textContent = 'Maple';
-      spans[1].textContent = 'Scouter';
-    } else if (spans.length === 1 && spans[0].textContent !== 'Maple Scouter') {
-      spans[0].textContent = 'Maple Scouter';
+    // every header link that wraps the logo image (desktop + mobile variants)
+    var links = document.querySelectorAll('header a');
+    for (var i = 0; i < links.length; i++) {
+      if (!links[i].querySelector('img[alt="logo"], img[src*="logo"]')) continue;
+      var spans = links[i].querySelectorAll('span');
+      if (spans.length >= 2) {
+        if (spans[0].textContent !== 'Maple ') spans[0].textContent = 'Maple ';
+        if (spans[1].textContent !== 'Scouter') spans[1].textContent = 'Scouter';
+      } else if (spans.length === 1 && spans[0].textContent !== 'Maple Scouter') {
+        spans[0].textContent = 'Maple Scouter';
+      }
+    }
+  }
+
+  // The homepage update-history table is Korean-only API content that cannot be
+  // statically translated — hide it in English mode rather than show raw Korean.
+  function hideKoreanChangelog() {
+    if (pathLocale() !== 'en') return;
+    var tables = document.querySelectorAll('table');
+    for (var i = 0; i < tables.length; i++) {
+      var t = tables[i];
+      var head = t.rows && t.rows[0] ? t.rows[0].textContent.replace(/\s+/g, '') : '';
+      if (!/^(Date(Highlights|Updates?)|날짜)/i.test(head)) continue;
+      var kr = 0, n = t.rows.length - 1;
+      for (var j = 1; j < t.rows.length; j++) if (HANGUL.test(t.rows[j].textContent)) kr++;
+      if (n > 0 && kr / n > 0.5) {
+        // hide the whole card (heading + shell), not just the table
+        var wrap = t.closest('div[class*="bg-surface-gray-surface-0"]') || t.closest('div') || t;
+        if (!wrap.__msfixHidden) { wrap.__msfixHidden = true; wrap.style.display = 'none'; }
+      }
     }
   }
 
@@ -357,11 +379,31 @@
           for (var j = 0; j < m.addedNodes.length; j++) processTree(m.addedNodes[j]);
         }
       }
+      fixLogo(); // React re-renders restore the Korean logo spans; keep it rebranded
     });
     observer.observe(document.body, {
       childList: true, subtree: true, characterData: true,
       attributes: true, attributeFilter: ATTRS
     });
+  }
+
+  /* ---------------- 4b. Ad removal ------------------------------------------------------ */
+  // Static slots/banners are hidden by the injected CSS; popup ad modals are built
+  // dynamically, so we remove any fixed-position overlay that carries an ad creative.
+  var REMOVE_ADS = true;
+
+  function killAdPopups() {
+    if (!REMOVE_ADS) return;
+    var imgs = document.querySelectorAll('img[src*="/next/ads/"], img[src*="files.maplescouter.com/next/ads"]');
+    for (var i = 0; i < imgs.length; i++) {
+      var el = imgs[i], overlay = null, p = el.parentElement;
+      while (p && p !== document.body) {
+        var pos = getComputedStyle(p).position;
+        if (pos === 'fixed') overlay = p;
+        p = p.parentElement;
+      }
+      if (overlay) overlay.remove();
+    }
   }
 
   /* ---------------- 5. UI polish CSS ---------------------------------------------------- */
@@ -408,8 +450,8 @@
     injectCss();
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setTimeout(function () { translateTitle(); fixLogo(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); }, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();

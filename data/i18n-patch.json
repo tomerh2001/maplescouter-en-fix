@@ -1634,7 +1634,7 @@
  "특수 효율": "Special Efficiency",
  "표준 어센트 계수": "Standard Ascent Coefficient",
  "기타 시드링 효율": "Other Oz Ring Efficiency",
- "최초의 유산": "First Legacy",
+ "최초의 유산": "Destiny Liberated",
  "데티2차": "Destiny 2nd Lib.",
  "데스티니 해방 시뮬레이션": "Destiny Liberation Simulator",
  "진행 중 데스티니해방 차수": "Current Destiny Liberation Stage",
@@ -5657,5 +5657,9 @@
  "판단": "Judgment",
  "창인전수": "Moonlit Blade Learnings",
  "기백": "Grounded Body",
- "수호신의 가호": "Focus Spirit"
+ "수호신의 가호": "Focus Spirit",
+ "해방": "Genesis Liberated",
+ "분석&최적화": "Analysis",
+ "랭킹&챌린지": "Rankings",
+ "정보센터": "Info Center"
 }
