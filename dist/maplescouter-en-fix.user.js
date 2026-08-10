@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.1.0
+// @version      1.1.1
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -312,6 +312,22 @@
     }
   }
 
+  // Remove the (empty) Favorites bar under the search box — it reserves a large
+  // block of vertical space. Set to false to keep the favorites feature.
+  var REMOVE_FAVORITES = true;
+
+  function hideFavoritesBar() {
+    if (!REMOVE_FAVORITES) return;
+    var spans = document.querySelectorAll('span.font-semibold');
+    for (var i = 0; i < spans.length; i++) {
+      var t = spans[i].textContent.trim();
+      if (t !== 'Favorite' && t !== '즐겨찾기') continue;
+      var block = spans[i].closest('div[class*="min-w-0"][class*="gap-3"]') ||
+                  spans[i].closest('div[class*="py-3"]');
+      if (block && !block.__msfixHidden) { block.__msfixHidden = true; block.style.display = 'none'; }
+    }
+  }
+
   // The homepage update-history table is Korean-only API content that cannot be
   // statically translated — hide it in English mode rather than show raw Korean.
   function hideKoreanChangelog() {
@@ -554,8 +570,8 @@
     injectCss();
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); refreshFloatRects(); }, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();
