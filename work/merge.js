@@ -185,17 +185,20 @@ const OVERRIDES = {
   '직접 입력': 'Manual Input',
   // boss viability badges: compact single-line forms (full meaning goes into a
   // hover tooltip added by the userscript)
-  '6인 최소컷': '6P Min',
-  '4인 최소컷': '4P Min',
-  '3인 최소컷': '3P Min',
-  '2인 최소컷': '2P Min',
-  '격수 3인 최소컷': '3-DPS Min',
-  '숍+격수2인 최소컷': 'Bish+2 Min',
-  '솔플 최소컷': 'Solo Min',
+  '6인 최소컷': '6 Players',
+  '4인 최소컷': '4 Players',
+  '3인 최소컷': '3 Players',
+  '2인 최소컷': '2 Players',
+  '격수 3인 최소컷': '3 DPS',
+  '숍+격수2인 최소컷': '2 Players + B',
+  '솔플 최소컷': 'Soloable-',
   '파티 최소컷': 'Party Min',
-  '솔플 가능': 'Solo OK',
-  '파티격 가능': 'Party OK',
-  '솔플 여유컷': 'Comfy Solo',
+  '솔플 가능': 'Solo',
+  '파티격 가능': 'Party-able',
+  '솔플 여유컷': 'Soloable+',
+  '입장 불가능': 'N/A',
+  // compact party-percentage label on boss cards (bracketed form wrapped badly)
+  '[파티]': 'Party',
 };
 for (const [k, v] of Object.entries(OVERRIDES)) { dict[k] = v; i18nPatch[k] = v; }
 for (const n of NICKNAMES) { delete dict[n]; }
@@ -215,17 +218,20 @@ dict['Ignore Dff(300)'] = 'IED (300)';
 dict['Ignore Dff(380)'] = 'IED (380)';
 dict['Manual Input (Character Stats)'] = 'Manual Input';
 dict['Enter Directly (Character Stats Changes)'] = 'Manual Input';
-dict['6-Player Min Spec'] = '6P Min';
-dict['4-Player Min Spec'] = '4P Min';
-dict['3-Player Min Spec'] = '3P Min';
-dict['2-Player Min Spec'] = '2P Min';
-dict['3-DPS Min Spec'] = '3-DPS Min';
-dict['Bishop + 2 DPS Min Spec'] = 'Bish+2 Min';
-dict['Solo Min Spec'] = 'Solo Min';
-dict['Party Min Spec'] = 'Party Min';
-dict['Solo Viable'] = 'Solo OK';
-dict['Party Viable'] = 'Party OK';
-dict['Solo Comfort Spec'] = 'Comfy Solo';
+for (const [oldV, newV] of [
+  ['6-Player Min Spec', '6 Players'], ['6P Min', '6 Players'],
+  ['4-Player Min Spec', '4 Players'], ['4P Min', '4 Players'],
+  ['3-Player Min Spec', '3 Players'], ['3P Min', '3 Players'],
+  ['2-Player Min Spec', '2 Players'], ['2P Min', '2 Players'],
+  ['3-DPS Min Spec', '3 DPS'], ['3-DPS Min', '3 DPS'],
+  ['Bishop + 2 DPS Min Spec', '2 Players + B'], ['Bish+2 Min', '2 Players + B'],
+  ['Solo Min Spec', 'Soloable-'], ['Solo Min', 'Soloable-'],
+  ['Party Min Spec', 'Party Min'],
+  ['Solo Viable', 'Solo'], ['Solo OK', 'Solo'],
+  ['Party Viable', 'Party-able'], ['Party OK', 'Party-able'],
+  ['Solo Comfort Spec', 'Soloable+'], ['Comfy Solo', 'Soloable+'],
+  ["Can't Enter", 'N/A'],
+]) dict[oldV] = newV;
 
 // ================= rules =================
 const rules = [

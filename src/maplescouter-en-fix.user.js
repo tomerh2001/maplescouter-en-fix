@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.3.2
+// @version      1.3.3
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -238,6 +238,30 @@
     });
   }
 
+  // Phrase-level fallback for recurring composite families (boss measurement
+  // notes etc.) whose exact variants are too numerous to enumerate.
+  var PHRASES = [
+    [/([A-Z]{1,3})직업/g, 'Class $1'],
+    [/([A-Z]{1,3})보스/g, 'Boss $1'],
+    [/체력 및 패턴 보정/g, 'HP & patterns adjusted'],
+    [/체력 보정/g, 'HP adjusted'],
+    [/하드 측정/g, 'Hard-mode measured'],
+    [/노말 측정/g, 'Normal-mode measured'],
+    [/측정 완료/g, 'measurement complete'],
+    [/실측 배율/g, 'measured multiplier'],
+    [/헥사보정/g, 'HEXA-adjusted'],
+    [/타보스 참고/g, 'based on other bosses'],
+    [/\(([\d.]+)\s*%\s*상향\)/g, '(+$1%)'],
+    [/([\d.]+)\s*%\s*상향/g, '+$1%'],
+    [/(\d+)분\s/g, '$1-min ']
+  ];
+
+  function phrasePass(t) {
+    var out = t;
+    for (var i = 0; i < PHRASES.length; i++) out = out.replace(PHRASES[i][0], PHRASES[i][1]);
+    return out;
+  }
+
   function translateString(s) {
     var d = data();
     var trimmed = s.trim();
@@ -246,6 +270,11 @@
     // Exact dict hits work for any language (also fixes Konglish English strings);
     // fuzzy handling below only applies to Korean text.
     if (out == null && !HANGUL.test(trimmed)) return null;
+    if (out == null && trimmed.charAt(trimmed.length - 1) === ')') {
+      // extraction captured many strings without their closing paren — retry
+      var noParen = d.dict[trimmed.slice(0, -1)];
+      if (noParen != null) out = noParen + (noParen.charAt(noParen.length - 1) === '(' ? ')' : /\([^)]*$/.test(noParen) ? ')' : '');
+    }
     if (out == null) {
       // "이름 ×3" / "이름 x3" quantity suffixes
       var m = trimmed.match(/^(.+?)\s*([×x]\s*[\d,]+)$/);
@@ -263,10 +292,10 @@
       }
     }
     if (out == null) out = builtinRules(trimmed, d);
-    // Last resort for composite nodes: translate embedded known terms.
-    // Never touch strings with @handles (author credits, server@nickname).
+    // Last resort for composite nodes: phrase families first, then embedded
+    // known terms. Never touch strings with @handles (author credits).
     if (out == null && trimmed.indexOf('@') === -1) {
-      var passed = hangulRunPass(trimmed, d);
+      var passed = hangulRunPass(phrasePass(trimmed), d);
       if (passed !== trimmed) out = passed;
     }
     if (out == null) return null;
@@ -466,18 +495,17 @@
 
   // Compact boss-viability badges carry their full meaning in a hover tooltip.
   var BADGE_TITLES = {
-    '6P Min': 'Minimum spec to clear with 6 players',
-    '4P Min': 'Minimum spec to clear with 4 players',
-    '3P Min': 'Minimum spec to clear with 3 players',
-    '2P Min': 'Minimum spec to clear with 2 players',
-    '3-DPS Min': 'Minimum spec with 3 DPS players',
-    'Bish+2 Min': 'Minimum spec: Bishop + 2 DPS',
-    'Solo Min': 'Minimum spec to solo clear',
+    '6 Players': 'Minimum spec to clear with 6 players',
+    '4 Players': 'Minimum spec to clear with 4 players',
+    '3 Players': 'Minimum spec to clear with 3 players',
+    '2 Players': 'Minimum spec to clear with 2 players',
+    '3 DPS': 'Minimum spec for a party of 3 DPS players',
+    '2 Players + B': 'Minimum spec for 2 DPS plus a Bishop',
+    'Soloable-': 'Bare minimum spec to solo this boss',
+    'Soloable+': 'You can comfortably solo this boss',
+    'Party-able': 'You can clear this boss in a party (as DPS)',
     'Party Min': 'Minimum spec to clear in a party',
-    'Solo OK': 'Solo clear viable',
-    'Party OK': 'Party clear viable (as DPS)',
-    'Comfy Solo': 'Comfortable solo clear',
-    "Can't Enter": 'Below the entry requirements'
+    'N/A': "Below this boss's entry requirements"
   };
 
   function translateTextNode(node) {
@@ -490,6 +518,43 @@
     if (BADGE_TITLES[shown] && node.parentElement && !node.parentElement.title) {
       node.parentElement.title = BADGE_TITLES[shown];
     }
+  }
+
+  // Second-chance matching for paragraphs whose text is split across several
+  // nodes (styled spans, <br>) or differs from the extracted literal only by
+  // whitespace: match the element's combined, normalized text against the dict.
+  function normKey(s) { return s.replace(/\s+/g, ' ').trim(); }
+
+  function normIndex(d) {
+    if (!d.__norm) {
+      var m = {};
+      for (var k in d.dict) {
+        if (k.length >= 8 && HANGUL.test(k)) m[normKey(k)] = d.dict[k];
+      }
+      d.__norm = m;
+    }
+    return d.__norm;
+  }
+
+  var INLINE_TAGS = { BR: 1, SPAN: 1, B: 1, STRONG: 1, I: 1, EM: 1 };
+
+  function tryElementTranslate(el, d) {
+    if (el.__msfixElDone) return;
+    var kids = el.children;
+    if (kids.length > 10) return;
+    for (var i = 0; i < kids.length; i++) if (!INLINE_TAGS[kids[i].tagName]) return;
+    var txt = el.textContent;
+    if (!txt || txt.length < 8 || txt.length > 500 || !HANGUL.test(txt)) return;
+    el.__msfixElDone = true;
+    var idx = normIndex(d);
+    var key = normKey(txt);
+    var hit = idx[key];
+    if (hit == null && key.charAt(key.length - 1) === ')') {
+      // many extracted literals are missing their closing paren
+      var h0 = idx[key.slice(0, -1)];
+      if (h0 != null) hit = h0 + (/\([^)]*$/.test(h0) ? ')' : '');
+    }
+    if (hit) el.textContent = hit;
   }
 
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
@@ -520,6 +585,18 @@
         return n.nodeValue && n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
+    // element-level pass FIRST — split paragraphs must match before the
+    // per-node pass translates fragments inside them
+    var d = data();
+    var ew = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: function (el) {
+        var t = el.nodeName;
+        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT' || t === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    if (root.nodeType === 1) tryElementTranslate(root, d);
+    while (ew.nextNode()) tryElementTranslate(ew.currentNode, d);
     var nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     for (var i = 0; i < nodes.length; i++) translateTextNode(nodes[i]);
