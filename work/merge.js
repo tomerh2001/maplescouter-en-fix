@@ -258,6 +258,31 @@ const rules = [
   ['^([\\d,]+)\\s*층$', '', 'Floor $1'],
 ];
 
+// Final forced overrides (win over everything; applied after cleanup). User-chosen wording.
+const FORCE = {
+  // 내실 → "Core Skills" (user preference over "Foundation"), kept consistent everywhere
+  '내실': 'Core Skills',
+  '내실메이커': 'Core Skills Maker',
+  '내실 메이커': 'Core Skills Maker',
+  '내실 메이커 종류': 'Core Skills Maker Type',
+  '캐릭터 내실 보기': 'View Character Core Skills',
+  '내실 변경': 'Change Core Skills (6th Job/Oz Rings)',
+  '보스 스펙 시뮬레이터에서 사용 가능한 내실 커스텀 제작 제공': 'Create custom Core Skills setups usable in the boss spec simulator',
+  // shortened cooldown field label
+  '기타 쿨감(%)(하이퍼 등)': 'Other CD Reduction sources',
+  // potential/flame option lines: current-option marker "Cur" → "Curr"
+  '보유옵션': 'Curr',
+  // drop the "main, " qualifier from the re-measurement note
+  '보스컷 갱신 시점 : 여름/겨울 업데이트 시작시점(메인, 재측정 수준), 그 외 스펙인플레(인플레만큼 기존컷 보정) 등':
+    'Boss Clear Spec update timing: at the start of the summer/winter updates (effectively a full re-measurement), plus spec inflation and similar (existing specs adjusted by the inflation amount)',
+  // "the Boss Clear Spec" → "an adjusted Boss Clear Spec"
+  '버튼을 눌러 보스컷을 확인하시기 바랍니다.': 'button. Press it to view an adjusted Boss Clear Spec.',
+};
+for (const [k, v] of Object.entries(FORCE)) { dict[k] = v; i18nPatch[k] = v; }
+// also override the site's own en.json values (rendered via i18next) if the keys differ there
+i18nPatch['내실메이커'] = 'Core Skills Maker';
+i18nPatch['내실'] = 'Core Skills';
+
 fs.mkdirSync(DATA, { recursive: true });
 fs.writeFileSync(path.join(DATA, 'i18n-patch.json'), JSON.stringify(i18nPatch, null, 1));
 fs.writeFileSync(path.join(DATA, 'dictionary.json'), JSON.stringify(dict));
