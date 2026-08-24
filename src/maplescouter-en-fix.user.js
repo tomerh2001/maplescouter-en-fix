@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.9
+// @version      1.4.10
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -525,10 +525,12 @@
       return 'Lv ' + d.stat.level + ' ' + (dict[cls] || cls);
     } catch (e) { return ''; }
   }
+  // An untouched preset slot still holds the site's default data (level 0), and offering that
+  // as something to import is just noise — the site itself treats level > 0 as "really saved".
   function presetDataOk(d) {
     if (!d || !d.stat || !d.stat.myClass) return false;
     var lv = Number(d.stat.level);
-    return isFinite(lv) && lv >= 0 && lv <= 300;
+    return isFinite(lv) && lv > 0 && lv <= 300;
   }
   function shortDate(s) {
     if (!s) return '';
