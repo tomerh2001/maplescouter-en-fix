@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.5
+// @version      1.4.6
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -401,88 +401,55 @@
     }
   }
 
-  /* ---------------- 4c. Preset export / import ------------------------------------------ */
-  // The site keeps manual-input state and named presets in localStorage. These two
-  // buttons let you back them up to a file and restore them on any browser/device.
+  /* ---------------- 4c. Legacy preset-file backward compatibility ----------------------- */
+  // The site now ships its own JSON preset export/import (as of Aug 2026), so we no longer
+  // add Export/Import buttons. But files exported by our OLD buttons use a different shape
+  //   {app:'maplescouter-en-fix', type:'preset-export', v:1, data:{'character-store', 'preset'}}
+  // than the site's ({type:'maplescouter-manual-preset', v:1, data:<encoded>}), so the site's
+  // importer rejects them. This bridge keeps those old files working: when the site reads an
+  // imported file, we peek at the text; if it is one of ours, we restore it the old way
+  // (write the localStorage keys back — the site still uses 'character-store'/'preset' — and
+  // reload) and quietly divert it from the site's importer. Everything else is untouched, so
+  // the site's own preset files import natively.
   var PRESET_KEYS = ['character-store', 'preset'];
 
-  function exportPreset() {
-    var payload = { app: 'maplescouter-en-fix', type: 'preset-export', v: 1, exportedAt: new Date().toISOString(), data: {} };
-    for (var i = 0; i < PRESET_KEYS.length; i++) {
-      var v = null;
-      try { v = localStorage.getItem(PRESET_KEYS[i]); } catch (e) {}
-      if (v != null) payload.data[PRESET_KEYS[i]] = v;
-    }
-    var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'maplescouter-preset-' + payload.exportedAt.slice(0, 10) + '.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  function isLegacyExport(obj) {
+    return obj && typeof obj === 'object' &&
+      (obj.app === 'maplescouter-en-fix' || obj.type === 'preset-export') &&
+      obj.data && typeof obj.data === 'object';
   }
 
-  function importPreset() {
-    var inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = '.json,application/json';
-    inp.onchange = function () {
-      var f = inp.files && inp.files[0];
-      if (!f) return;
-      f.text().then(function (txt) {
-        var p;
-        try { p = JSON.parse(txt); } catch (e) { p = null; }
-        if (!p || p.type !== 'preset-export' || !p.data || typeof p.data !== 'object') {
-          alert('This is not a valid MapleScouter preset file.');
-          return;
+  function applyLegacyImport(obj) {
+    try {
+      for (var k in obj.data) {
+        if (PRESET_KEYS.indexOf(k) !== -1 && typeof obj.data[k] === 'string') {
+          localStorage.setItem(k, obj.data[k]);
         }
-        for (var k in p.data) {
-          if (PRESET_KEYS.indexOf(k) !== -1 && typeof p.data[k] === 'string') localStorage.setItem(k, p.data[k]);
+      }
+    } catch (e) {}
+    location.reload();
+  }
+
+  function installLegacyImportBridge() {
+    if (window.__msfixTextHook) return;
+    var origText = Blob.prototype.text;
+    if (typeof origText !== 'function') return;
+    window.__msfixTextHook = true;
+    Blob.prototype.text = function () {
+      var p = origText.apply(this, arguments);
+      return p.then(function (txt) {
+        // Cheap signature check first so we never JSON.parse unrelated blobs.
+        if (typeof txt === 'string' && txt.length < 5e6 && txt.indexOf('maplescouter-en-fix') !== -1) {
+          var obj = null;
+          try { obj = JSON.parse(txt); } catch (e) {}
+          if (isLegacyExport(obj)) {
+            applyLegacyImport(obj);              // restores + reloads
+            return new Promise(function () {});   // never resolves → site's importer waits until our reload (no error toast)
+          }
         }
-        location.reload();
+        return txt;                              // the site's own preset files (and all other blobs) pass through
       });
     };
-    inp.click();
-  }
-
-  function ensurePresetButtons() {
-    if (document.getElementById('msfix-export-preset')) return;
-    var buttons = document.querySelectorAll('button');
-    var saveBtn = null;
-    for (var i = 0; i < buttons.length; i++) {
-      var t = buttons[i].textContent.trim();
-      if (t === 'Save Preset' || t === '프리셋 저장') { saveBtn = buttons[i]; break; }
-    }
-    if (!saveBtn || !saveBtn.parentElement) return;
-    var SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide h-4 w-4">';
-    var ICONS = {
-      // lucide "upload" — mirrors Save Preset's download-tray icon
-      export_: SVG_OPEN + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>',
-      // lucide "file-up" — mirrors Load Preset's file-down icon
-      import_: SVG_OPEN + '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="m15 15-3-3-3 3"/></svg>'
-    };
-    function mk(id, label, icon, handler) {
-      var b = document.createElement('button');
-      b.id = id;
-      b.className = saveBtn.className;
-      b.type = 'button';
-      b.appendChild(document.createTextNode(label)); // plain text node = identical typography
-      b.insertAdjacentHTML('beforeend', icon);
-      b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); handler(); });
-      return b;
-    }
-    var row = saveBtn.parentElement;
-    row.appendChild(mk('msfix-export-preset', 'Export', ICONS.export_, exportPreset));
-    row.appendChild(mk('msfix-import-preset', 'Import', ICONS.import_, importPreset));
-    // compact the row so all four buttons share the title's line in the 500px panel
-    row.style.gap = '6px';
-    var all = row.querySelectorAll('button');
-    for (var k = 0; k < all.length; k++) {
-      all[k].style.paddingLeft = '8px';
-      all[k].style.paddingRight = '8px';
-      all[k].style.fontSize = '13px';
-    }
   }
 
   // Our longer English labels ("Genesis Liberated" etc.) can make the weapon-state
@@ -865,10 +832,11 @@
 
   function onReady() {
     injectCss();
+    installLegacyImportBridge(); // let the site's native import accept our old export files
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
-    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); compactCheckboxRows(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); ensurePresetButtons(); compactCheckboxRows(); refreshFloatRects(); }, 2000);
+    setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); }, 400);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();

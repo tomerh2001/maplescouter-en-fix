@@ -90,16 +90,28 @@
  "seedverCount": 8,
  "delta": [
   {
-   "gen": "delta2",
-   "bucket": "sentence",
+   "gen": "delta3",
+   "bucket": "item",
    "idx": 0,
-   "count": 2
+   "count": 11
   },
   {
-   "gen": "delta2",
+   "gen": "delta3",
+   "bucket": "sentence",
+   "idx": 0,
+   "count": 43
+  },
+  {
+   "gen": "delta3",
    "bucket": "ui",
    "idx": 0,
-   "count": 9
+   "count": 90
+  },
+  {
+   "gen": "delta3",
+   "bucket": "ui",
+   "idx": 1,
+   "count": 2
   }
  ]
 }
