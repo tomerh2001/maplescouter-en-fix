@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.6
+// @version      1.4.7
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -402,32 +402,99 @@
   }
 
   /* ---------------- 4c. Legacy preset-file backward compatibility ----------------------- */
-  // The site now ships its own JSON preset export/import (as of Aug 2026), so we no longer
-  // add Export/Import buttons. But files exported by our OLD buttons use a different shape
-  //   {app:'maplescouter-en-fix', type:'preset-export', v:1, data:{'character-store', 'preset'}}
-  // than the site's ({type:'maplescouter-manual-preset', v:1, data:<encoded>}), so the site's
-  // importer rejects them. This bridge keeps those old files working: when the site reads an
-  // imported file, we peek at the text; if it is one of ours, we restore it the old way
-  // (write the localStorage keys back — the site still uses 'character-store'/'preset' — and
-  // reload) and quietly divert it from the site's importer. Everything else is untouched, so
-  // the site's own preset files import natively.
-  var PRESET_KEYS = ['character-store', 'preset'];
-
+  // The site now ships its own JSON preset export/import (Aug 2026), so we no longer add
+  // Export/Import buttons. Files exported by our OLD button use a different shape
+  //   {app:'maplescouter-en-fix', type:'preset-export', v:1, data:{'character-store','preset'}}
+  // than the site's ({type:'maplescouter-manual-preset', v:1, data:<userStat>}), so the site's
+  // importer rejects them. Rather than restore-and-reload (which doesn't drive the site's
+  // manual-input form — that reads from a separate 'manual-store'/draftStat), we TRANSLATE an
+  // old file into the site's native format as the site reads it, and let the site's OWN
+  // importer handle it: it validates, adds each preset as a new slot with a toast, and no
+  // reload — exactly the native experience, and loading a slot then populates the form
+  // correctly through the site's own logic. An old file can hold several presets (its saved
+  // slots + the backed-up build) while the site imports one per file read, so we replay the
+  // file through the importer once per preset using a per-File cursor.
   function isLegacyExport(obj) {
     return obj && typeof obj === 'object' &&
       (obj.app === 'maplescouter-en-fix' || obj.type === 'preset-export') &&
       obj.data && typeof obj.data === 'object';
   }
 
-  function applyLegacyImport(obj) {
-    try {
-      for (var k in obj.data) {
-        if (PRESET_KEYS.indexOf(k) !== -1 && typeof obj.data[k] === 'string') {
-          localStorage.setItem(k, obj.data[k]);
-        }
+  // The site validates an imported preset's data against its CURRENT schema and throws on any
+  // missing key. Old files were exported against an older schema, so deep-conform their data
+  // to the shape of a current, live userStat (fills any keys added since) before handing it over.
+  function conformTo(template, data) {
+    if (Array.isArray(template)) {
+      return (Array.isArray(data) && data.length === template.length)
+        ? template.map(function (t, i) { return conformTo(t, data[i]); })
+        : template;
+    }
+    if (template && typeof template === 'object') {
+      var out = {};
+      for (var k in template) {
+        out[k] = (data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, k))
+          ? conformTo(template[k], data[k]) : template[k];
       }
+      return out;
+    }
+    return (data !== null && data !== undefined && typeof data === typeof template) ? data : template;
+  }
+
+  // A current, schema-current userStat to use as the conform template (preset slot > live build).
+  function currentUserStatTemplate() {
+    try {
+      var pr = JSON.parse(localStorage.getItem('preset'));
+      var slots = pr && pr.state && pr.state.preset;
+      for (var k in slots) { var d = slots[k] && slots[k].data; if (d && d.stat && ('myClass' in d.stat)) return d; }
     } catch (e) {}
-    location.reload();
+    try {
+      var cs = JSON.parse(localStorage.getItem('character-store'));
+      var us = cs && cs.state && cs.state.searchResult && cs.state.searchResult.userStat;
+      if (us && us.stat) return us;
+    } catch (e) {}
+    try {
+      var ms = JSON.parse(localStorage.getItem('manual-store'));
+      var ds = ms && ms.state && ms.state.draftStat;
+      if (ds && ds.stat) return ds;
+    } catch (e) {}
+    return null;
+  }
+
+  // Pull every usable preset out of an old export, as native-format {data,label,savedAt} entries.
+  function legacyPresets(oldObj) {
+    var tmpl = currentUserStatTemplate();
+    var list = [];
+    var src = oldObj.data || {};
+    function add(rawData, label, savedAt) {
+      if (!rawData || typeof rawData !== 'object' || !rawData.stat || !rawData.stat.myClass) return;
+      list.push({
+        data: tmpl ? conformTo(tmpl, rawData) : rawData,
+        label: typeof label === 'string' ? label : '',
+        savedAt: typeof savedAt === 'string' ? savedAt : null
+      });
+    }
+    try {
+      var pr = src.preset ? JSON.parse(src.preset) : null;
+      var slots = pr && pr.state && pr.state.preset;
+      if (slots) Object.keys(slots).sort(function (a, b) { return (+a) - (+b); })
+        .forEach(function (k) { add(slots[k] && slots[k].data, slots[k] && slots[k].label, slots[k] && slots[k].savedAt); });
+    } catch (e) {}
+    if (!list.length) { // no saved slots → fall back to the backed-up live build
+      try {
+        var cs = src['character-store'] ? JSON.parse(src['character-store']) : null;
+        var us = cs && cs.state && cs.state.searchResult && cs.state.searchResult.userStat;
+        add(us, 'Imported backup', null);
+      } catch (e) {}
+    }
+    return list;
+  }
+
+  function nativePresetJson(p) {
+    return JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: p.savedAt, label: p.label, data: p.data });
+  }
+
+  function presetSlotCount() {
+    try { return Object.keys(JSON.parse(localStorage.getItem('preset')).state.preset).length; } catch (e) { return 0; }
   }
 
   function installLegacyImportBridge() {
@@ -435,21 +502,61 @@
     var origText = Blob.prototype.text;
     if (typeof origText !== 'function') return;
     window.__msfixTextHook = true;
+
+    // (1) Translate an old file's bytes into native format as the site reads them. A per-File
+    //     cursor returns the next preset on each read, so replaying the file imports them all.
     Blob.prototype.text = function () {
-      var p = origText.apply(this, arguments);
-      return p.then(function (txt) {
-        // Cheap signature check first so we never JSON.parse unrelated blobs.
-        if (typeof txt === 'string' && txt.length < 5e6 && txt.indexOf('maplescouter-en-fix') !== -1) {
-          var obj = null;
-          try { obj = JSON.parse(txt); } catch (e) {}
-          if (isLegacyExport(obj)) {
-            applyLegacyImport(obj);              // restores + reloads
-            return new Promise(function () {});   // never resolves → site's importer waits until our reload (no error toast)
-          }
-        }
-        return txt;                              // the site's own preset files (and all other blobs) pass through
+      var self = this;
+      return origText.apply(self, arguments).then(function (txt) {
+        if (typeof txt !== 'string' || txt.length > 5e6 || txt.indexOf('maplescouter-en-fix') === -1) return txt;
+        var obj = null; try { obj = JSON.parse(txt); } catch (e) {}
+        if (!isLegacyExport(obj)) return txt;
+        if (!self.__msfixPresets) { self.__msfixPresets = legacyPresets(obj); self.__msfixCursor = 0; }
+        var list = self.__msfixPresets;
+        if (!list.length) return txt; // nothing usable → let the site show its own error
+        var i = Math.min(self.__msfixCursor, list.length - 1);
+        self.__msfixCursor = i + 1;
+        return nativePresetJson(list[i]);
       });
     };
+
+    // (2) The site imports one preset per file read. When an old file holding several presets
+    //     is picked, replay it through the same input so the site imports the rest too. The
+    //     site's import handler captures the current slot map, so we must let each import
+    //     commit (and the component re-render) before replaying the next — otherwise two
+    //     imports pick the same new-slot index and the second overwrites the first.
+    document.addEventListener('change', function (e) {
+      var input = e.target;
+      if (!(input && input.tagName === 'INPUT' && input.type === 'file' && /json/i.test(input.accept || ''))) return;
+      var f = input.files && input.files[0];
+      if (!f || f.__msfixReplaying || typeof DataTransfer === 'undefined') return;
+      var startSlots = presetSlotCount(); // captured before the site's own read imports preset #1
+      origText.call(f).then(function (txt) {
+        if (typeof txt !== 'string' || txt.indexOf('maplescouter-en-fix') === -1) return;
+        var obj = null; try { obj = JSON.parse(txt); } catch (e) {}
+        if (!isLegacyExport(obj)) return;
+        var total = legacyPresets(obj).length;
+        if (total <= 1) return; // the site's own read already handled the only preset
+        var imported = 1;
+        (function pump() {
+          if (imported >= total) return;
+          var target = startSlots + imported, tries = 0; // wait until the previous import committed
+          (function waitCommit() {
+            if (presetSlotCount() >= target || tries++ > 80) {
+              setTimeout(function () { // brief beat for the re-render so the handler sees the fresh slot map
+                imported++;
+                try {
+                  f.__msfixReplaying = true;
+                  var dt = new DataTransfer(); dt.items.add(f); input.files = dt.files;
+                  input.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch (err) {}
+                pump();
+              }, 200);
+            } else setTimeout(waitCommit, 60);
+          })();
+        })();
+      });
+    }, true);
   }
 
   // Our longer English labels ("Genesis Liberated" etc.) can make the weapon-state
