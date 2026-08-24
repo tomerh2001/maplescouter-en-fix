@@ -32,7 +32,10 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 - **Remembers your server selection** (GMS/KMS/JMS/TMS/MSEA) and restores it if the site wipes it.
 - **No ads.** Ad slots, sponsor banners, popup ads, and the NOTICE billboard bar are removed — along with the empty gaps they reserve.
 - **Tooltips stay open.** Hover cards that used to vanish when you moved the mouse onto them now stay pinned until your cursor actually leaves.
-- **Legacy preset-file compatibility.** MapleScouter now ships its own JSON preset export/import, so the script no longer adds its own buttons. Files exported by earlier versions of this script still work: when you import one through the site's native importer, the script recognizes the old format and restores it automatically.
+- **Preset import, improved.** MapleScouter now ships its own JSON preset export/import, so the script no longer adds its own buttons — it fills the gaps in the site's instead:
+  - **Old export files still work.** Files saved by earlier versions of this script are translated to the site's format on the fly and imported natively (validated, added to a slot, no reload).
+  - **Pick the character.** Those old files hold *every* preset you had saved, so when a file contains more than one character you're asked which to import instead of getting all of them.
+  - **Overwrite an existing preset.** The site can only ever *add* a preset. Every row in the Save window gets an extra Import icon next to its Save-as-JSON / Delete pair, so you can refresh that specific preset from a file — choose the character, choose the name (keep the current one, take the file's, auto, or type your own), then confirm the overwrite.
 - The empty Favorites bar and other wasted-space blocks are removed; labels that clipped or overflowed with longer English text are fixed.
 
 ## How it works
@@ -41,7 +44,7 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 |---|---|
 | **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~5,600 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
 | **DOM dictionary** | A `MutationObserver` + exact-match KO→EN dictionary (official game-data join) for text that's hardcoded or arrives from the API at runtime, plus pattern rules for dynamic strings (Korean number units 억/만, dates, burst-window notation like 3극 4준). |
-| **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, legacy preset-file compatibility — all in the userscript core. |
+| **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, preset import/overwrite — all in the userscript core. |
 
 ## Repo layout
 

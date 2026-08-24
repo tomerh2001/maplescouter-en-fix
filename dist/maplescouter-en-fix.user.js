@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.7
+// @version      1.4.8
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -401,19 +401,22 @@
     }
   }
 
-  /* ---------------- 4c. Legacy preset-file backward compatibility ----------------------- */
-  // The site now ships its own JSON preset export/import (Aug 2026), so we no longer add
-  // Export/Import buttons. Files exported by our OLD button use a different shape
-  //   {app:'maplescouter-en-fix', type:'preset-export', v:1, data:{'character-store','preset'}}
-  // than the site's ({type:'maplescouter-manual-preset', v:1, data:<userStat>}), so the site's
-  // importer rejects them. Rather than restore-and-reload (which doesn't drive the site's
-  // manual-input form — that reads from a separate 'manual-store'/draftStat), we TRANSLATE an
-  // old file into the site's native format as the site reads it, and let the site's OWN
-  // importer handle it: it validates, adds each preset as a new slot with a toast, and no
-  // reload — exactly the native experience, and loading a slot then populates the form
-  // correctly through the site's own logic. An old file can hold several presets (its saved
-  // slots + the backed-up build) while the site imports one per file read, so we replay the
-  // file through the importer once per preset using a per-File cursor.
+  /* ---------------- 4c. Preset JSON: legacy files, character picker, overwrite ---------- */
+  // The site ships its own JSON preset export/import (Aug 2026), so we no longer add
+  // Export/Import buttons of our own. Two gaps are left, and this section fills both.
+  //
+  //  1. A file exported by our OLD button holds EVERY preset that was saved at the time
+  //       {app:'maplescouter-en-fix', type:'preset-export', v:1, data:{'character-store','preset'}}
+  //     whereas the site imports one preset per file and rejects our shape outright. We
+  //     translate such a file into the site's native format as it is read and let the site's
+  //     OWN importer take it from there (it validates, adds a slot, toasts, no reload). When
+  //     the file holds more than one character we first ask which one to import.
+  //
+  //  2. The site's import can only ever ADD a preset. To refresh one that already exists we
+  //     add an Import button to the Save window — file, character, target preset, name, then
+  //     an explicit confirm — writing through the site's own preset store so the UI updates
+  //     live. (Note the manual-input form renders from 'manual-store'/draftStat, NOT from
+  //     'character-store', which is why restoring localStorage wholesale never showed up.)
   function isLegacyExport(obj) {
     return obj && typeof obj === 'object' &&
       (obj.app === 'maplescouter-en-fix' || obj.type === 'preset-export') &&
@@ -490,72 +493,407 @@
   }
 
   function nativePresetJson(p) {
-    return JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: p.savedAt, label: p.label, data: p.data });
+    // Give it a caption of its own: an unlabelled preset is otherwise captioned from whichever
+    // character happens to be loaded, which would misname what we just imported.
+    return JSON.stringify({
+      type: 'maplescouter-manual-preset', v: 1,
+      savedAt: p.savedAt, label: p.label || autoPresetLabel(p.data), data: p.data
+    });
   }
 
-  function presetSlotCount() {
-    try { return Object.keys(JSON.parse(localStorage.getItem('preset')).state.preset).length; } catch (e) { return 0; }
+  // Read any preset file we understand: ours (which may hold many characters) or the site's own.
+  function parsePresetFile(txt) {
+    var obj = null;
+    try { obj = JSON.parse(txt); } catch (e) { return null; }
+    if (isLegacyExport(obj)) return { kind: 'legacy', presets: legacyPresets(obj) };
+    if (obj && obj.type === 'maplescouter-manual-preset' && obj.data) {
+      return { kind: 'native', presets: [{
+        data: obj.data,
+        label: typeof obj.label === 'string' ? obj.label : '',
+        savedAt: typeof obj.savedAt === 'string' ? obj.savedAt : null
+      }] };
+    }
+    return null;
   }
 
-  function installLegacyImportBridge() {
-    if (window.__msfixTextHook) return;
-    var origText = Blob.prototype.text;
-    if (typeof origText !== 'function') return;
-    window.__msfixTextHook = true;
+  // The site names an unlabelled preset "Lv <level> <class>"; mirror that, but store the class
+  // already translated so the saved label reads as English everywhere it is shown or exported.
+  function autoPresetLabel(d) {
+    try {
+      var cls = d.stat.myClass;
+      var dict = data().dict || {};
+      return 'Lv ' + d.stat.level + ' ' + (dict[cls] || cls);
+    } catch (e) { return ''; }
+  }
+  function presetDataOk(d) {
+    if (!d || !d.stat || !d.stat.myClass) return false;
+    var lv = Number(d.stat.level);
+    return isFinite(lv) && lv >= 0 && lv <= 300;
+  }
+  function shortDate(s) {
+    if (!s) return '';
+    var t = new Date(s);
+    return isNaN(t.getTime()) ? '' : t.toLocaleDateString() + ' ' + t.toLocaleTimeString();
+  }
 
-    // (1) Translate an old file's bytes into native format as the site reads them. A per-File
-    //     cursor returns the next preset on each read, so replaying the file imports them all.
-    Blob.prototype.text = function () {
-      var self = this;
-      return origText.apply(self, arguments).then(function (txt) {
-        if (typeof txt !== 'string' || txt.length > 5e6 || txt.indexOf('maplescouter-en-fix') === -1) return txt;
-        var obj = null; try { obj = JSON.parse(txt); } catch (e) {}
-        if (!isLegacyExport(obj)) return txt;
-        if (!self.__msfixPresets) { self.__msfixPresets = legacyPresets(obj); self.__msfixCursor = 0; }
-        var list = self.__msfixPresets;
-        if (!list.length) return txt; // nothing usable → let the site show its own error
-        var i = Math.min(self.__msfixCursor, list.length - 1);
-        self.__msfixCursor = i + 1;
-        return nativePresetJson(list[i]);
-      });
+  /* -- the site's own preset store + toast, found by SHAPE so module ids may change ------- */
+  var _wpReq = null, _siteApi = null;
+  function wpRequire() {
+    if (_wpReq) return _wpReq;
+    try {
+      var arr = self.webpackChunk_N_E;
+      if (arr && typeof arr.push === 'function') arr.push([[Symbol('msfix')], {}, function (r) { _wpReq = r; }]);
+    } catch (e) {}
+    return _wpReq;
+  }
+  function siteApi() {
+    if (_siteApi) return _siteApi;
+    var req = wpRequire();
+    if (!req || !req.m) return null;
+    var api = { presetStore: null, toast: null };
+    for (var id in req.m) {
+      var ex; try { ex = req(id); } catch (e) { continue; }
+      if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) continue;
+      var names; try { names = Object.keys(ex); } catch (e) { continue; }
+      for (var i = 0; i < names.length; i++) {
+        var v; try { v = ex[names[i]]; } catch (e) { continue; }
+        if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
+        try {
+          if (!api.toast && typeof v.success === 'function' && typeof v.error === 'function' && typeof v.dismiss === 'function') api.toast = v;
+          if (!api.presetStore && typeof v.getState === 'function') {
+            var st = v.getState();
+            if (st && st.preset && typeof st.setPreset === 'function' && typeof st.deletePreset === 'function') api.presetStore = v;
+          }
+        } catch (e) {}
+      }
+      if (api.presetStore && api.toast) break;
+    }
+    if (api.presetStore) _siteApi = api;
+    return api.presetStore ? api : null;
+  }
+  function toastOk(m) { var a = siteApi(); if (a && a.toast) try { a.toast.success(m); } catch (e) {} }
+  function toastErr(m) { var a = siteApi(); if (a && a.toast) try { a.toast.error(m); } catch (e) {} }
+
+  /* -- dialogs assembled from the site's own utility classes so they look native --------- */
+  var CLS = {
+    box: 'bg-surface-gray-surface-0 fixed top-[50%] left-[50%] z-[2147483647] grid max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg w-[440px] max-w-[95vw]',
+    body: 'flex w-full flex-col gap-4',
+    list: 'flex w-full flex-col gap-2',
+    head: 'text-center text-sm font-semibold',
+    hint: 'text-text-gray-low text-center text-xs',
+    hintLeft: 'text-text-gray-low text-xs',
+    row: "inline-flex cursor-pointer justify-center whitespace-nowrap rounded-lg text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline outline-outline-gray-med text-text-gray-high hover:bg-surface-gray-surface-1 active:bg-surface-gray-surface-1 px-4 has-[>svg]:px-3 h-auto w-full flex-col items-center gap-0.5 py-2",
+    rowMain: 'w-full truncate text-center',
+    rowSub: 'text-text-gray-low text-xs',
+    soft: "inline-flex items-center cursor-pointer justify-center whitespace-nowrap text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 bg-surface-gray-surface-2 text-text-gray-high hover:bg-surface-gray-surface-3 h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
+    primary: "inline-flex items-center cursor-pointer justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 bg-primary text-text-gray-white hover:bg-surface-primary-primary-hover h-9 px-4 py-2 has-[>svg]:px-3 flex-1",
+    ghost: 'inline-flex items-center cursor-pointer justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all outline outline-outline-gray-med text-text-gray-high hover:bg-surface-gray-surface-1 h-9 px-4 py-2 flex-1',
+    input: 'placeholder:text-muted-gray-low outline-outline-gray-med bg-surface-gray-surface-0 flex w-full min-w-0 rounded-[4px] text-sm outline transition-[color,box-shadow] md:text-sm h-8 px-2 py-[5.5px] focus:outline-outline-gray-high',
+    footer: 'border-outline-gray-med flex flex-col gap-2 border-t pt-3',
+    close: 'absolute top-4 right-4 cursor-pointer rounded-xs opacity-70 transition-opacity hover:opacity-100',
+    iconGroup: 'absolute top-1/2 right-2 flex -translate-y-1/2 gap-1',
+    iconBtn: "inline-flex items-center cursor-pointer justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline outline-outline-gray-med text-text-gray-high active:bg-surface-gray-surface-1 border-outline-gray-med bg-surface-gray-surface-0 hover:bg-surface-gray-surface-1 size-7 shadow-sm"
+  };
+  var ICON_FILE_UP = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-up size-4"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/></svg>';
+  var ICON_X = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x size-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+  // Dialogs stack (character -> name -> confirm), so only the front-most one may be dismissed:
+  // a click or Escape must never reach through and close the ones waiting behind it.
+  var dlgStack = [];
+
+  function msDialog(opts) {
+    // The site's dialog is modal, and Radix parks `pointer-events:none` on <body> while it is
+    // open — which our dialog would inherit — so both layers opt back in explicitly. Both also
+    // sit at the same z-index as the site's dialog, letting DOM order do the stacking.
+    var overlay = document.createElement('div');
+    overlay.className = 'msfix-dialog-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483647;pointer-events:auto';
+    var box = document.createElement('div');
+    box.className = CLS.box + ' msfix-dialog';
+    box.style.setProperty('pointer-events', 'auto', 'important');
+    box.setAttribute('role', 'dialog');
+    var body = document.createElement('div');
+    body.className = CLS.body;
+    box.appendChild(body);
+
+    var handle = {};
+    dlgStack.push(handle);
+    function isTop() { return dlgStack[dlgStack.length - 1] === handle; }
+    function close() {
+      var i = dlgStack.indexOf(handle);
+      if (i !== -1) dlgStack.splice(i, 1);
+      window.removeEventListener('keydown', onKey, true);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (box.parentNode) box.parentNode.removeChild(box);
+    }
+    function cancel() { if (!isTop()) return; close(); if (opts.onCancel) opts.onCancel(); }
+    // Escape must dismiss ONLY the front-most window. The site's dialog listens on document,
+    // so we take the key on `window` — which captures first — and stop it dead there.
+    function onKey(e) {
+      if (e.key !== 'Escape' || !isTop()) return;
+      e.preventDefault(); e.stopImmediatePropagation(); cancel();
+    }
+    window.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', cancel);
+
+    // The site's dialog dismisses itself on any pointer event outside its own box — which is
+    // every click in ours. Keep those from reaching it so the window we opened on top of never
+    // takes the one behind it down with it.
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'touchstart', 'focusin'].forEach(function (t) {
+      var swallow = function (e) { e.stopPropagation(); };
+      overlay.addEventListener(t, swallow);
+      box.addEventListener(t, swallow);
+    });
+
+    var x = document.createElement('button');
+    x.type = 'button'; x.className = CLS.close; x.innerHTML = ICON_X;
+    x.addEventListener('click', cancel);
+    box.appendChild(x);
+
+    var head = document.createElement('span');
+    head.className = CLS.head; head.textContent = opts.title;
+    body.appendChild(head);
+    if (opts.subtitle) {
+      var sub = document.createElement('span');
+      sub.className = CLS.hint; sub.textContent = opts.subtitle;
+      body.appendChild(sub);
+    }
+    if (opts.build) opts.build(body, close);
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(box);
+    return { close: close };
+  }
+
+  function msRow(main, sub, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = CLS.row;
+    var m = document.createElement('span'); m.className = CLS.rowMain; m.textContent = main;
+    b.appendChild(m);
+    if (sub) { var s = document.createElement('span'); s.className = CLS.rowSub; s.textContent = sub; b.appendChild(s); }
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function msActions(body, cancelLabel, onCancel, goLabel, onGo) {
+    var row = document.createElement('div');
+    row.className = 'flex w-full gap-2';
+    var no = document.createElement('button');
+    no.type = 'button'; no.className = CLS.ghost; no.textContent = cancelLabel;
+    no.addEventListener('click', onCancel);
+    var yes = document.createElement('button');
+    yes.type = 'button'; yes.className = CLS.primary; yes.textContent = goLabel;
+    yes.addEventListener('click', onGo);
+    row.appendChild(no); row.appendChild(yes);
+    body.appendChild(row);
+  }
+
+  // Step 1 — an old file can hold every preset we ever saved, so ask which character to use.
+  // Skipped entirely when the file only holds one.
+  function pickPreset(presets, cb, onCancel) {
+    if (presets.length === 1) { cb(presets[0]); return; }
+    msDialog({
+      title: 'Select the character to import',
+      subtitle: 'This file holds ' + presets.length + ' saved presets.',
+      onCancel: onCancel,
+      build: function (body, close) {
+        var list = document.createElement('div'); list.className = CLS.list;
+        presets.forEach(function (p, i) {
+          list.appendChild(msRow(
+            p.label || autoPresetLabel(p.data) || ('Preset ' + (i + 1)),
+            shortDate(p.savedAt),
+            function () { close(); cb(p); }
+          ));
+        });
+        body.appendChild(list);
+      }
+    });
+  }
+
+  // Step 2 — the name: keep what the slot has, take the file's, auto, or type one.
+  function pickName(p, slotKey, isNew, current) {
+    var fromFile = p.label || '';
+    var auto = autoPresetLabel(p.data);
+    var currentName = current ? (current.label || '') : '';
+    msDialog({
+      title: 'Name for Preset ' + slotKey,
+      subtitle: 'Pick a name, or type your own.',
+      build: function (body, close) {
+        var input = document.createElement('input');
+        input.className = CLS.input;
+        input.setAttribute('maxlength', '40');
+        input.placeholder = 'Preset name (auto if left blank)';
+        input.value = fromFile || currentName || '';
+        body.appendChild(input);
+
+        var list = document.createElement('div'); list.className = CLS.list;
+        if (fromFile) list.appendChild(msRow('Use the name from the file', fromFile,
+          function () { input.value = fromFile; input.focus(); }));
+        if (!isNew && currentName) list.appendChild(msRow('Keep the current name', currentName,
+          function () { input.value = currentName; input.focus(); }));
+        if (auto) list.appendChild(msRow('Use the automatic name', auto,
+          function () { input.value = auto; input.focus(); }));
+        body.appendChild(list);
+
+        msActions(body, 'Cancel', function () { close(); },
+          'Continue', function () { close(); confirmWrite(p, slotKey, isNew, current, input.value.trim()); });
+        setTimeout(function () { input.focus(); }, 30);
+      }
+    });
+  }
+
+  // Step 4 — overwriting throws away a saved preset, so confirm it explicitly.
+  function confirmWrite(p, slotKey, isNew, current, label) {
+    var shown = label || autoPresetLabel(p.data);
+    var currentName = current ? (current.label || (presetDataOk(current.data) ? autoPresetLabel(current.data) : '')) : '';
+    msDialog({
+      title: isNew ? ('Add as Preset ' + slotKey + '?') : ('Overwrite Preset ' + slotKey + '?'),
+      subtitle: isNew
+        ? (shown + ' will be saved as Preset ' + slotKey + '.')
+        : ('Preset ' + slotKey + (currentName ? ' (' + currentName + ')' : '') + ' will be replaced by ' + shown + '. This cannot be undone.'),
+      build: function (body, close) {
+        msActions(body, 'Cancel', function () { close(); },
+          isNew ? 'Add preset' : 'Overwrite', function () { close(); applyPreset(p, slotKey, label); });
+      }
+    });
+  }
+
+  function applyPreset(p, slotKey, label) {
+    var api = siteApi();
+    if (!api) { toastErr('Preset storage is unavailable'); return; }
+    var st = api.presetStore.getState();
+    var map = {}, cur = st.preset || {};
+    for (var k in cur) map[k] = cur[k];
+    var tmpl = currentUserStatTemplate();
+    // An unlabelled preset is captioned from whatever character is loaded right now, not from
+    // the preset itself — which would show the wrong name here — so always store one.
+    map[slotKey] = {
+      data: tmpl ? conformTo(tmpl, p.data) : p.data,
+      label: label || autoPresetLabel(p.data),
+      savedAt: new Date().toISOString()
     };
+    try { st.setPreset(map); } catch (e) { toastErr('Could not save the preset'); return; }
+    toastOk('Preset ' + slotKey + ' updated' + (label ? ' (' + label + ')' : ''));
+    var closeBtn = document.querySelector('[data-slot=dialog-close]');
+    if (closeBtn) closeBtn.click();
+  }
 
-    // (2) The site imports one preset per file read. When an old file holding several presets
-    //     is picked, replay it through the same input so the site imports the rest too. The
-    //     site's import handler captures the current slot map, so we must let each import
-    //     commit (and the component re-render) before replaying the next — otherwise two
-    //     imports pick the same new-slot index and the second overwrites the first.
+  function pickJsonFile(cb) {
+    var inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json';
+    inp.style.display = 'none';
+    inp.__msfixOwn = true; // so the interception below ignores our own picker
+    inp.addEventListener('change', function () {
+      var f = inp.files && inp.files[0];
+      if (inp.parentNode) inp.parentNode.removeChild(inp);
+      if (!f) return;
+      if (f.size > 5e6) { toastErr('File is abnormally large'); return; }
+      f.text().then(cb, function () { toastErr("Couldn't read the file"); });
+    });
+    document.body.appendChild(inp);
+    inp.click();
+  }
+
+  // The Save window is the dialog with the name field; the Load window has none.
+  function saveDialogEl() {
+    var dlgs = document.querySelectorAll('[data-slot=dialog-content]');
+    for (var i = 0; i < dlgs.length; i++) if (dlgs[i].querySelector('input[data-slot=input]')) return dlgs[i];
+    return null;
+  }
+
+  // The site's own import can only ever ADD a preset. Give every row in the Save window an
+  // Import icon next to its Save-as-JSON / Delete pair, so a file can refresh THAT preset:
+  // file -> character (when the file holds several) -> name -> confirm.
+  function ensureSaveImportIcons() {
+    var dlg = saveDialogEl();
+    if (!dlg) return;
+    var list = dlg.querySelector('div.flex.w-full.flex-col.gap-2');
+    if (!list) return;
+    var rows = list.querySelectorAll(':scope > div.group.relative');
+    for (var i = 0; i < rows.length; i++) addRowImportIcon(rows[i], String(i + 1));
+  }
+
+  function addRowImportIcon(row, slotKey) {
+    if (row.querySelector('.msfix-row-import')) return;
+    // Saved presets already carry an icon group; empty slots have none, so make one.
+    var group = row.querySelector('div.absolute.top-1\\/2.right-2');
+    if (!group) {
+      group = document.createElement('div');
+      group.className = CLS.iconGroup;
+      row.appendChild(group);
+    }
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = CLS.iconBtn + ' msfix-row-import';
+    btn.title = 'Import from JSON file (overwrite this preset)';
+    btn.innerHTML = ICON_FILE_UP;
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      var api = siteApi();
+      var cur = api ? (api.presetStore.getState().preset || {})[slotKey] : null;
+      var isNew = !(cur && presetDataOk(cur.data));
+      pickJsonFile(function (txt) {
+        var parsed = parsePresetFile(txt);
+        var usable = parsed ? parsed.presets.filter(function (p) { return presetDataOk(p.data); }) : [];
+        if (!usable.length) { toastErr("This isn't MapleScouter manual-preset data"); return; }
+        pickPreset(usable, function (p) { pickName(p, slotKey, isNew, cur); });
+      });
+    });
+    group.insertBefore(btn, group.firstChild);
+
+    // The row's caption is centred across the full width, so an extra icon would have it run
+    // underneath the icons. Reserve the icon strip's width on BOTH sides: the caption stays
+    // centred and `truncate` clips it before it reaches them.
+    var main = row.querySelector(':scope > button');
+    if (!main) return;
+    var pad = function () {
+      var w = group.offsetWidth;
+      if (!w) return;
+      var v = (w + 12) + 'px';
+      main.style.paddingLeft = v;
+      main.style.paddingRight = v;
+    };
+    pad();
+    setTimeout(pad, 50);
+  }
+
+  // The Load window's own Import reads one preset per file. Hold its handler until we know
+  // what the file is: ours with several characters gets a picker first, then goes through as a
+  // single native preset; anything else is handed straight back so the site imports it as usual.
+  function installPresetImportBridge() {
+    if (window.__msfixPresetBridge) return;
+    window.__msfixPresetBridge = true;
     document.addEventListener('change', function (e) {
       var input = e.target;
-      if (!(input && input.tagName === 'INPUT' && input.type === 'file' && /json/i.test(input.accept || ''))) return;
+      if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
+      if (input.__msfixOwn) return;
+      if (!/json/i.test(input.accept || '')) return;
+      if (input.__msfixPass) { input.__msfixPass = false; return; } // our own replay
       var f = input.files && input.files[0];
-      if (!f || f.__msfixReplaying || typeof DataTransfer === 'undefined') return;
-      var startSlots = presetSlotCount(); // captured before the site's own read imports preset #1
-      origText.call(f).then(function (txt) {
-        if (typeof txt !== 'string' || txt.indexOf('maplescouter-en-fix') === -1) return;
-        var obj = null; try { obj = JSON.parse(txt); } catch (e) {}
-        if (!isLegacyExport(obj)) return;
-        var total = legacyPresets(obj).length;
-        if (total <= 1) return; // the site's own read already handled the only preset
-        var imported = 1;
-        (function pump() {
-          if (imported >= total) return;
-          var target = startSlots + imported, tries = 0; // wait until the previous import committed
-          (function waitCommit() {
-            if (presetSlotCount() >= target || tries++ > 80) {
-              setTimeout(function () { // brief beat for the re-render so the handler sees the fresh slot map
-                imported++;
-                try {
-                  f.__msfixReplaying = true;
-                  var dt = new DataTransfer(); dt.items.add(f); input.files = dt.files;
-                  input.dispatchEvent(new Event('change', { bubbles: true }));
-                } catch (err) {}
-                pump();
-              }, 200);
-            } else setTimeout(waitCommit, 60);
-          })();
-        })();
-      });
+      if (!f || typeof DataTransfer === 'undefined') return;
+
+      e.stopImmediatePropagation();
+      e.preventDefault();
+
+      function deliver(text, name) {
+        try {
+          var dt = new DataTransfer();
+          dt.items.add(new File([text], name || f.name, { type: 'application/json' }));
+          input.__msfixPass = true;
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (err) { input.__msfixPass = false; }
+      }
+
+      f.text().then(function (txt) {
+        var parsed = (typeof txt === 'string' && txt.length < 5e6) ? parsePresetFile(txt) : null;
+        if (!parsed || parsed.kind !== 'legacy') { deliver(txt); return; } // site handles its own files
+        var usable = parsed.presets.filter(function (p) { return presetDataOk(p.data); });
+        if (!usable.length) { deliver(txt); return; }                      // let the site explain why
+        pickPreset(usable,
+          function (p) { deliver(nativePresetJson(p), 'scouter-preset-import.json'); },
+          function () { try { input.value = ''; } catch (err) {} });       // cancelled — allow a re-pick
+      }, function () { deliver(''); });
     }, true);
   }
 
@@ -939,11 +1277,17 @@
 
   function onReady() {
     injectCss();
-    installLegacyImportBridge(); // let the site's native import accept our old export files
+    installPresetImportBridge(); // let the site's native import accept our old export files
+    // The Save window mounts on click, so look for it right after one rather than waiting
+    // for the housekeeping interval below.
+    document.addEventListener('click', function () {
+      setTimeout(ensureSaveImportIcons, 60);
+      setTimeout(ensureSaveImportIcons, 260);
+    }, true);
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
     setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); refreshFloatRects(); }, 2000);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); ensureSaveImportIcons(); refreshFloatRects(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();
