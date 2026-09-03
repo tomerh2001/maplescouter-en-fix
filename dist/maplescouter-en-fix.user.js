@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.5.2
+// @version      1.5.3
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), a character picker with auto-save + cloud sync for the Manual Input page, and it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -9,7 +9,7 @@
 // @match        https://www.maplescouter.com/*
 // @run-at       document-start
 // @grant        none
-// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.5.2
+// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.5.3
 // @updateURL    https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @downloadURL  https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @supportURL   https://github.com/tomerh2001/maplescouter-en-fix/issues
@@ -1294,7 +1294,7 @@
   var LS_CLOUD_URL = 'msfix:cloud:url', LS_CLOUD_SLOTS = 'msfix:cloud:slots', LS_CLOUD_SELECTED = 'msfix:cloud:selected';
   var LS_CLOUD_ENABLED = 'msfix:cloud:enabled', LS_CLOUD_AUTO = 'msfix:cloud:auto';
   var IGN_RE = /^[A-Za-z0-9]{1,16}$/;
-  var AUTOSAVE_MS = 500, AUTOUPLOAD_MS = 3000, POLL_MS = 30000, POLL_MAX_MS = 120000, LIST_CACHE_MS = 2000, FETCH_TIMEOUT_MS = 10000;
+  var AUTOSAVE_MS = 500, AUTOUPLOAD_MS = 3000, POLL_MS = 300000, POLL_MAX_MS = 900000, FOCUS_CHECK_GAP_MS = 60000, LIST_CACHE_MS = 2000, FETCH_TIMEOUT_MS = 10000;
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -1629,6 +1629,7 @@
   function stopPolling() { if (cloud.pollTimer) { clearTimeout(cloud.pollTimer); cloud.pollTimer = null; } }
   function startPolling() { if (cloud.pollTimer) return; cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay); }
   function pollTick(immediate) {
+    if (document.hidden && !immediate) { stopPolling(); return; }   // no passive traffic from background tabs
     stopPolling();
     var key = selectedKey();
     if (!isInputRoute() || !cloudEnabled() || !key || !cloud.bindings[key] || !cloud.bindings[key].ign) { cloud.pollDelay = POLL_MS; return; }
@@ -2574,7 +2575,12 @@
     injectCloudCss();
     applyRouteGate();
     schedulePickerMount();
-    var onFocus = function () { if (!document.hidden) { cloud.pollDelay = POLL_MS; pollTick(true); } };
+    var onFocus = function () {
+      if (document.hidden) { stopPolling(); return; }
+      var now = Date.now();
+      if (now - (cloud.lastFocusCheck || 0) < FOCUS_CHECK_GAP_MS) { startPolling(); return; }
+      cloud.lastFocusCheck = now; cloud.pollDelay = POLL_MS; pollTick(true);
+    };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
     window.addEventListener('storage', function (e) {
