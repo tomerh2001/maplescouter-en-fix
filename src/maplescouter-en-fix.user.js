@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.5.1
+// @version      1.5.2
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), a character picker with auto-save + cloud sync for the Manual Input page, and it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -2250,19 +2250,19 @@
   function deleteLocalSlot(key) {
     var slot = presetMap()[key]; if (!slot) return;
     var name = slotName(key, slot), b = cloud.bindings[key];
-    confirmDialog('Delete this character?', 'Removes the local preset.' + (b && b.ign && b.cloudUpdatedAt ? ' The cloud copy stays.' : ''), 'Delete', function () {
+    (function () {
       var s = cloudStores(); if (!s) return;
       if (cloud.selected && cloud.selected.key === key) { if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; } cloud.selected = null; }
       var hm = histMap(); delete hm[histKey(key)]; saveHist();
       delete cloud.bindings[key]; saveBindings();
       try { s.ps.getState().deletePreset(key); } catch (e) { toastErr('Could not delete the preset'); return; }
       reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
-      toastOk('Deleted');
-    });
+      toastOk('Deleted the local preset');
+    })();
   }
   function deleteCloud(key) {
     var b = cloud.bindings[key]; if (!b || !b.ign) return;
-    confirmDialog('Delete from the cloud?', 'The local preset stays.', 'Delete from cloud', function () {
+    (function () {
       busy(1);
       cloudFetch('DELETE', cloudPath(b.ign), { headers: { 'X-Confirm': b.ign } }).then(function (r) {
         busy(-1);
@@ -2271,7 +2271,20 @@
           toastOk('Deleted from the cloud');
         } else toastErr('Could not delete ' + b.ign + ' from the cloud (' + r.status + ')');
       }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable'); updateIcon(); });
-    });
+    })();
+  }
+  // One Delete entry: choose what to delete.
+  function deleteDialog(key) {
+    var slot = presetMap()[key]; if (!slot) return;
+    var b = cloud.bindings[key], inCloud = !!(b && b.ign && b.cloudUpdatedAt);
+    msDialog({ title: 'Delete this character?', subtitle: inCloud ? 'The local preset and the cloud copy are deleted separately.' : '', build: function (body, close) {
+      var row = el('div', 'flex w-full flex-wrap gap-2');
+      var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); };
+      mk('Cancel', CLS.ghost, null);
+      mk('Delete local', CLS.ghost + ' text-red-500', function () { deleteLocalSlot(key); });
+      if (inCloud) mk('Delete from cloud', CLS.ghost + ' text-red-500', function () { deleteCloud(key); });
+      body.appendChild(row);
+    } });
   }
   // Download a saved character as a native preset file (with "ign" so importing re-links it).
   function downloadSlotJson(key) {
@@ -2303,8 +2316,7 @@
       act('pencil', b && b.ign ? 'Rename' : 'Set IGN', '', function () { if (b && b.ign) renameSlot(key); else openAddDialog(IGN_RE.test(slot.label || '') ? slot.label : '', { linkKey: key }); });
       act('download', 'Download', '', function () { downloadSlotJson(key); });
       act('history', 'History', '', function () { openHistory(key); });
-      act('trash', 'Delete', 'text-red-500', function () { deleteLocalSlot(key); });
-      if (inCloud) act('cloud-off', 'Delete from cloud', 'text-red-500 col-span-2', function () { deleteCloud(key); });
+      act('trash', 'Delete', 'text-red-500', function () { deleteDialog(key); });
       body.appendChild(grid);
       var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
     } });
