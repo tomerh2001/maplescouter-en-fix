@@ -13,30 +13,40 @@ Everything is pre-built — you only need the developer account and the upload c
 3. Store listing (copy/paste below), category **Fun** or **Productivity → Tools**, language English.
 4. Privacy tab:
    - Single purpose: "Translates maplescouter.com into English, remembers site preferences, and adds a character picker with optional cloud sync of the user's stat presets."
-   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the stat presets of the Manual Input page."
-   - Data usage: the only data transmitted is a stat preset the user explicitly uploads (or has opted in to auto-upload) to scouter.tomerh2001.com — declare "user activity / website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
+   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the stat presets of the Character pagel Input page."
+   - Data usage: the only data transmitted is a stat preset the user explicitly uploads to scouter.tomerh2001.com — declare "user activity / website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
 5. Submit for review. First review usually takes a few hours to a couple of days.
 6. For updates: bump the userscript @version, rebuild, upload the new zip to the existing item.
 
 ## Listing copy
 
-**Name:** MapleScouter English Fix
+**Name:** MapleScouter English Fix + Cloud Characters
 
 **Summary (132 chars max):**
-Full English translations for maplescouter.com with real GMS terms, a character picker with cloud sync, language memory, no ads.
+Full English for maplescouter.com, a character picker with auto-save, cloud sync by IGN, history, no ads. Made for GMS players.
 
 **Description:**
-MapleScouter (환산주스탯) is the best MapleStory stat-equivalence calculator around, but its English mode ships with thousands of missing translations. This extension fixes that:
+MapleScouter (환산주스탯) is the best MapleStory stat calculator around, but its English mode is missing thousands of translations and it cannot load GMS characters. This extension fixes both.
 
-• ~4,500 missing translations added, using proper Global MapleStory terminology (Sacred Symbol, Legion, Boss Clear Spec — not machine translations)
-• ~55,000 official item/monster/map names from KMS↔GMS game-data matching
-• Fixes awkward Konglish the site already had ("Boss Cut", "Doping", "Authentic Symbol"…)
-• Remembers your language and server (GMS/KMS/JMS/TMS/MSEA) — no more resetting to Korean every visit
-• Removes ads and sponsor banners
-• Tooltips stay open while your mouse is over them
-• Character picker on the Manual Input page: inputs auto-save into the selected preset, switch characters instantly
-• Optional cloud sync of your presets (public, no account) so the same character is available from any browser
-• Preset export/import improvements (old files, per-slot overwrite, IGN carried in the file)
-• Player names and user posts are never altered
+Translation
+- About 4,500 missing translations added, with real Global MapleStory terms (Sacred Symbol, Legion, Boss Clear Spec), not machine translations
+- About 55,000 official item, monster and map names from KMS to GMS game data matching
+- Fixes awkward English the site already had ("Boss Cut", "Doping", "Authentic Symbol")
+- Player names and user posts are never changed
 
-Not affiliated with maplescouter.com or Nexon. All game data © Nexon.
+Characters (the Character page)
+- One list of your saved characters with class, level and HEXA stat; pick one and everything you type is saved into it as you go
+- Switch characters instantly, no reload
+- Cloud sync by IGN: upload a character, then load it from any browser by typing its name. Nothing is uploaded until you click the sync icon
+- The sync icon shows synced, edited since the last upload, cloud copy newer, or conflict, and lets you upload, discard your changes, or compare
+- History: the last 10 saves of each character, restorable with one click
+- Overwrite, rename, download or delete a character from its menu; import JSON files
+
+Quality of life
+- Remembers your language and server (GMS, KMS, JMS, TMS, MSEA), no more resetting to Korean every visit
+- Removes ads and sponsor banners
+- Tooltips stay open while your mouse is over them
+
+The cloud is public and needs no account: anyone who knows an IGN can load or overwrite it, so do not store anything private.
+
+Not affiliated with maplescouter.com or Nexon. All game data (c) Nexon.

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "MapleScouter English Fix",
+  "name": "MapleScouter English Fix + Cloud Characters",
   "version": "1.3.5",
-  "description": "Complete English translations for maplescouter.com with GMS terminology, language & server memory, ad removal, and QoL fixes.",
+  "description": "Full English for maplescouter.com, a character picker with auto-save, cloud sync by IGN, history, no ads. Made for GMS players.",
   "homepage_url": "https://github.com/tomerh2001/maplescouter-en-fix",
   "icons": {
     "16": "icons/icon16.png",
@@ -11,8 +11,14 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://maplescouter.com/*", "https://www.maplescouter.com/*"],
-      "js": ["msfix-data.js", "maplescouter-en-fix.js"],
+      "matches": [
+        "https://maplescouter.com/*",
+        "https://www.maplescouter.com/*"
+      ],
+      "js": [
+        "msfix-data.js",
+        "maplescouter-en-fix.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }

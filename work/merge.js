@@ -260,6 +260,12 @@ const rules = [
 
 // Final forced overrides (win over everything; applied after cleanup). User-chosen wording.
 const FORCE = {
+  // v1.5.1: the page is a character workspace now (picker + cloud), not a bare form.
+  '직접 입력': 'Character',
+  '직접입력': 'Character',
+  '수기 입력 결과': 'Character Result',
+  '수기 입력 결과가 없습니다': 'No character result yet',
+
   // 내실 → "Core Skills" (user preference over "Foundation"), kept consistent everywhere
   '내실': 'Core Skills',
   '내실메이커': 'Core Skills Maker',

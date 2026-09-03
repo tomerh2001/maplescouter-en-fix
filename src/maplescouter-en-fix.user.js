@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.5.0
+// @version      1.5.1
 // @description  Complete English translations for maplescouter.com (GMS-context, not literal), a character picker with auto-save + cloud sync for the Manual Input page, and it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
@@ -1300,8 +1300,10 @@
   function lsSet(k, v) { try { if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
   function lsJson(k, fb) { var v = lsGet(k); if (v == null) return fb; try { var o = JSON.parse(v); return o == null ? fb : o; } catch (e) { return fb; } }
   function cloudUrl() { var u = lsGet(LS_CLOUD_URL); return (u && /^https?:\/\//.test(u) ? u : CLOUD_URL).replace(/\/+$/, ''); }
-  function cloudEnabled() { return lsGet(LS_CLOUD_ENABLED) !== 'false'; }
-  function autoUploadOn() { return lsGet(LS_CLOUD_AUTO) === 'true'; }
+  // v1.5.1: cloud sync is always on and auto-upload always off (no toggles). The storage keys
+  // stay reserved so values written by older builds are ignored rather than misread.
+  function cloudEnabled() { return true; }
+  function autoUploadOn() { return false; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function eqi(a, b) { return String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase(); }
   function nowIso() { return new Date().toISOString(); }
@@ -1316,8 +1318,8 @@
   var CLOUD_CSS = [
     '.msfix-charpicker [hidden]{display:none!important}',
     '.msfix-charpicker .msfix-dd{top:100%}',
-    '.msfix-charpicker .msfix-opt[aria-selected="true"]{background-color:var(--color-surface-gray-surface-1)}',
-    '.msfix-charpicker .msfix-opt.msfix-active{background-color:var(--color-surface-gray-surface-2)}',
+    '.msfix-charpicker .msfix-opt[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--color-primary,#e5772f)}',
+    '.msfix-charpicker .msfix-row-menu{opacity:.55}.msfix-charpicker .msfix-opt:hover .msfix-row-menu,.msfix-charpicker .msfix-opt.msfix-active .msfix-row-menu,.msfix-charpicker .msfix-row-menu:focus{opacity:1}',
     '@media (prefers-reduced-motion: reduce){.msfix-charpicker .animate-spin{animation:none}}'
   ].join('\n');
   var _hasSupport = null;
@@ -1460,17 +1462,51 @@
 
   /* -- display helpers ------------------------------------------------------------------- */
   function classEn(ko) { var d = data(); return (siteRefs.enBundle && siteRefs.enBundle[ko]) || d.i18nPatch[ko] || d.dict[ko] || ko || ''; }
+  var LS_CLOUD_HEXA = 'msfix:cloud:hexa';
+  // "HEXA" = the site's HEXA-converted main stat under Boss 300 (calculatedData.boss300_hexaStat,
+  // the figure the result page labels HEXA). The site only computes it when Result is pressed, so
+  // remember it per input-hash and show it for any preset — local or cloud — whose inputs match.
+  var hexaCache = null;
+  function hexaMap() { if (!hexaCache) hexaCache = lsJson(LS_CLOUD_HEXA, {}); return hexaCache; }
+  // The site's result.userStat is the submitted inputs plus derived fields (hexa.hexaSkill*,
+  // hexa.character_class, hexa.hexaStat_opened) with `power` zeroed, so hash a projection that
+  // drops exactly those and the same inputs — draft, slot or cloud copy — map to the same key.
+  var HEXA_CORE_RE = /^(?:skillCore|masteryCore|reinCore|generalCore)\d+$|^hexaStat$/;
+  function hexaKey(d) {
+    var c = {};
+    for (var k in d) { if (k === 'power') continue; if (k === 'hexa') { var hx = {}; for (var j in d.hexa || {}) if (HEXA_CORE_RE.test(j)) hx[j] = d.hexa[j]; c.hexa = hx; } else c[k] = d[k]; }
+    return hashData(c);
+  }
+  function noteResult(res) {
+    var cd = res && res.calculatedData, us = res && res.userStat;
+    if (!cd || !us) return;
+    var v = Number(cd.boss300_hexaStat);
+    if (!isFinite(v) || v <= 0) return;
+    var h = hexaKey(us), m = hexaMap();
+    if (m[h] && m[h].v === Math.round(v)) return;
+    m[h] = { v: Math.round(v), at: nowIso() };
+    var ks = Object.keys(m);
+    if (ks.length > 80) { ks.sort(function (a, b) { return m[a].at < m[b].at ? -1 : 1; }); while (ks.length > 80) delete m[ks.shift()]; }
+    lsSet(LS_CLOUD_HEXA, JSON.stringify(m));
+    if (picker.open) renderDropdown();
+  }
+  function hexaForData(d) { if (!d) return null; var e = hexaMap()[hexaKey(d)]; return e ? e.v : null; }
+  function fmtNum(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function fmtK(n) { n = Math.round(n); return n >= 10000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n); }
   function slotMeta(sd) {
-    var st = (sd && sd.stat) || {}; var lv = Number(st.level); var hx = sd && sd.hexa ? Number(sd.hexa.hexaStat) : 0;
-    return { classKo: st.myClass || '', classEn: classEn(st.myClass || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexaStat: isFinite(hx) && hx > 0 ? hx : 0 };
+    var st = (sd && sd.stat) || {}; var lv = Number(st.level);
+    return { classKo: st.myClass || '', classEn: classEn(st.myClass || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: hexaForData(sd) };
   }
   function docMeta(doc) {
     var m = doc && doc.meta; var p = doc && doc.preset && doc.preset.data;
-    if (p && p.stat) return slotMeta(p);
-    var lv = m ? Number(m.level) : 0, hx = m ? Number(m.hexaStat) : 0;
-    return { classKo: (m && m.class) || '', classEn: classEn((m && m.class) || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexaStat: isFinite(hx) && hx > 0 ? hx : 0 };
+    var r;
+    if (p && p.stat) r = slotMeta(p);
+    else { var lv = m ? Number(m.level) : 0; r = { classKo: (m && m.class) || '', classEn: classEn((m && m.class) || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: null }; }
+    var hc = m ? Number(m.hexaConverted) : NaN;
+    if (r.hexa == null && isFinite(hc) && hc > 0) r.hexa = Math.round(hc);
+    return r;
   }
-  function metaLine(m) { if (!m.classKo && !m.level) return 'empty preset'; return (m.classEn || '?') + ' Lv ' + m.level + (m.hexaStat ? ' · HEXA ' + m.hexaStat : ''); }
+  function metaLine(m) { if (!m.classKo && !m.level) return 'empty preset'; return (m.classEn || '?') + ' Lv ' + m.level + ', ' + (m.hexa ? fmtK(m.hexa) + ' HEXA' : 'HEXA n/a'); }
   function relTime(iso) {
     if (!iso) return 'never';
     var t = new Date(iso).getTime(); if (isNaN(t)) return '';
@@ -1483,7 +1519,7 @@
   function dayDate(iso) { if (!iso) return ''; var t = new Date(iso); return isNaN(t.getTime()) ? '' : t.toLocaleDateString(); }
   function slotName(key, slot) {
     var b = cloud.bindings[key];
-    if (b && b.ign) return b.ign + (slot && slot.label && !eqi(slot.label, b.ign) ? ' · ' + slot.label : '');
+    if (b && b.ign) return b.ign + (slot && slot.label && !eqi(slot.label, b.ign) ? ' (' + slot.label + ')' : '');
     return (slot && slot.label) || (slot && presetDataOk(slot.data) ? autoPresetLabel(slot.data) : '') || ('Preset ' + key);
   }
   function svgIcon(name, extra) {
@@ -1496,6 +1532,14 @@
       'cloud-download': '<path d="M12 13v8l-4-4"/><path d="m12 21 4-4"/><path d="M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284"/>',
       'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
       'plus': '<path d="M5 12h14"/><path d="M12 5v14"/>',
+      'check': '<path d="M20 6 9 17l-5-5"/>',
+      'ellipsis': '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+      'file-up': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/>',
+      'download': '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+      'save': '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+      'history': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+      'pencil': '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+      'trash': '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
       'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>'
     };
     return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-' + name + ' size-4' + (extra ? ' ' + extra : '') + '">' + (P[name] || '') + '</svg>';
@@ -1506,7 +1550,7 @@
   function setOffline(flag) {
     if (cloud.offline === flag) return;
     cloud.offline = flag;
-    if (flag) toastErr('Cloud unavailable — working offline');
+    if (flag) toastErr('Cloud unavailable. Working offline.');
     updateIcon(); renderDropdown();
   }
   function cloudFetch(method, path, opts) {
@@ -1613,26 +1657,67 @@
     return { state: 'conflict', key: key, b: b };
   }
   var ICON_STATES = {
-    'none':         { icon: 'cloud',          color: 'text-text-gray-low', title: 'No character selected — inputs are not being saved. Pick one from the list.' },
-    'unlinked':     { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Saved locally as a preset; not linked to an IGN. Click to link and upload.' },
-    'off':          { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Cloud sync is off (toggle it in the character list footer).' },
-    'not-uploaded': { icon: 'cloud-upload',   color: 'text-text-gray-low', title: 'Not in the cloud yet — click to upload.' },
-    'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable — click to retry.' },
+    'none':         { icon: 'cloud',          color: 'text-text-gray-low', title: 'No character selected. Your inputs are not being saved. Pick one from the list.' },
+    'unlinked':     { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Saved locally, not linked to an IGN. Click to link and upload.' },
+    'off':          { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Cloud sync is off.' },
+    'not-uploaded': { icon: 'cloud-upload',   color: 'text-text-gray-low', title: 'Not in the cloud yet. Click to upload.' },
+    'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable. Click to retry.' },
     'synced':       { icon: 'cloud-check',    color: 'text-green-600',     title: 'Synced with the cloud.' },
-    'local-ahead':  { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited since the last upload — click to upload.' },
-    'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer — click to compare and pull it.' },
-    'conflict':     { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited here AND changed in the cloud — click to compare.' }
+    'local-ahead':  { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited since the last upload. Click to upload.' },
+    'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer. Click to compare.' },
+    'conflict':     { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Changed here and in the cloud. Click to compare.' }
   };
+  /* -- site-styled hover tooltip for the sync icon (the native title is slow and unstyled) -- */
+  var TIP_CLS = 'bg-popover text-popover-foreground z-[2147483647] w-fit rounded-md px-3 py-1.5 text-xs text-balance shadow-md msfix-tip';
+  var TIP_ARROW_CLS = 'bg-popover fill-popover z-[2147483647] size-2.5 rotate-45 msfix-tip-arrow';
+  function attachTooltip(btn) {
+    if (btn.__msfixTip) return;
+    var tip = null, arrow = null;
+    function text() { return btn.getAttribute('data-msfix-tip') || btn.getAttribute('aria-label') || ''; }
+    function place() {
+      if (!tip) return;
+      var r = btn.getBoundingClientRect();
+      tip.style.left = '0px'; tip.style.top = '0px';
+      var w = tip.offsetWidth, h = tip.offsetHeight;
+      var left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+      var top = r.bottom + 8, above = false;
+      if (top + h > window.innerHeight - 8) { top = r.top - h - 8; above = true; }
+      tip.style.left = left + 'px'; tip.style.top = top + 'px';
+      arrow.style.left = (r.left + r.width / 2 - 5) + 'px';
+      arrow.style.top = (above ? top + h - 5 : top - 5) + 'px';
+    }
+    function show() {
+      var t = text(); if (!t) return;
+      if (!tip) {
+        tip = el('div', TIP_CLS); tip.setAttribute('role', 'tooltip'); tip.setAttribute('data-msfix-ui', '');
+        tip.id = 'msfix-tip-' + Math.random().toString(36).slice(2, 8);
+        tip.style.cssText = 'position:fixed;max-width:280px;pointer-events:none;white-space:normal';
+        arrow = el('div', TIP_ARROW_CLS); arrow.setAttribute('data-msfix-ui', '');
+        arrow.style.cssText = 'position:fixed;pointer-events:none';
+        document.body.appendChild(tip); document.body.appendChild(arrow);
+        btn.setAttribute('aria-describedby', tip.id);
+      }
+      tip.textContent = t; place();
+    }
+    function hide() { if (tip) { tip.remove(); arrow.remove(); tip = arrow = null; btn.removeAttribute('aria-describedby'); } }
+    btn.addEventListener('mouseenter', show); btn.addEventListener('focus', show);
+    btn.addEventListener('mouseleave', hide); btn.addEventListener('blur', hide); btn.addEventListener('click', hide);
+    window.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); }, true);
+    window.addEventListener('scroll', place, true); window.addEventListener('resize', place);
+    btn.__msfixTip = { refresh: function () { if (tip) show(); }, hide: hide };
+  }
   function updateIcon() {
     if (!picker.icon) return;
     var info = syncInfo(), st = ICON_STATES[info.state] || ICON_STATES.none;
     var b = info.b, title = st.title;
-    if (b && b.ign) title = b.ign + ' — ' + title + (info.state === 'synced' && b.syncedAt ? ' Uploaded ' + relTime(b.syncedAt) + '.' : '');
+    if (b && b.ign) title = title + (info.state === 'synced' && b.syncedAt ? ' Uploaded ' + relTime(b.syncedAt) + '.' : '');
     var busyNow = cloud.busy > 0;
     picker.icon.className = SOFT_BASE + ' msfix-sync ' + (busyNow ? 'text-text-gray-low' : st.color);
     picker.icon.innerHTML = busyNow ? svgIcon('loader', 'animate-spin') : svgIcon(st.icon);
-    picker.icon.title = busyNow ? 'Working…' : title;
-    picker.icon.setAttribute('aria-label', picker.icon.title);
+    var tipText = busyNow ? 'Working...' : title;
+    picker.icon.setAttribute('data-msfix-tip', tipText); picker.icon.removeAttribute('title');
+    picker.icon.setAttribute('aria-label', tipText);
+    if (picker.icon.__msfixTip) picker.icon.__msfixTip.refresh();
     picker.icon.setAttribute('data-msfix-sync', busyNow ? 'busy' : info.state);
     if (picker.live && picker.live.textContent !== title) picker.live.textContent = title;
   }
@@ -1674,7 +1759,7 @@
       if (keys[i] === cur || !map[keys[i]] || !presetDataOk(map[keys[i]].data)) continue;
       if (hashData(map[keys[i]].data) === h) { setSelected(keys[i], false, true); return; }
     }
-    if (strict && cur) deselect('Inputs no longer match ' + slotName(cur, map[cur]) + ' — pick a character to resume saving');
+    if (strict && cur) deselect('Inputs no longer match ' + slotName(cur, map[cur]) + '. Pick a character to resume saving.');
   }
 
   /* -- auto-save: the draft goes into the selected slot 500 ms after the last change ------ */
@@ -1700,6 +1785,7 @@
     var slot = presetMap()[key]; if (!slot) return;
     if (hashData(slot.data) === hashData(d)) return;
     if (!writeDraftToSlot(key, d)) return;
+    pushHistory(key, 'edit', d);
     updateIcon(); if (picker.open) renderDropdown();
     var b = cloud.bindings[key];
     if (!noUpload && autoUploadOn() && cloudEnabled() && b && b.ign) scheduleAutoUpload(key);
@@ -1712,11 +1798,12 @@
       if (info.key !== key || (info.state !== 'local-ahead' && info.state !== 'not-uploaded')) return;
       uploadSlot(key, { quiet: true, onConflict: function () {
         // never pop a modal mid-edit: the icon shows the conflict, one toast per character
-        if (cloud.conflictToastKey !== key) { cloud.conflictToastKey = key; toastErr(cloud.bindings[key].ign + ' changed in the cloud — click the sync icon to compare'); }
+        if (cloud.conflictToastKey !== key) { cloud.conflictToastKey = key; toastErr(cloud.bindings[key].ign + ' changed in the cloud. Click the sync icon to compare.'); }
       } });
     }, AUTOUPLOAD_MS);
   }
   function onDraftChange(s, prev) {
+    if (s && prev && s.result !== prev.result) noteResult(s.result);
     if (!s || !prev || s.draftStat === prev.draftStat) return;
     var structural = s.draftVersion !== prev.draftVersion;
     if (structural) { setTimeout(ensureCharPicker, 0); setTimeout(ensureCharPicker, 250); setTimeout(ensureCharPicker, 900); }
@@ -1736,6 +1823,7 @@
     cloud.subscribed = true;
     reconcileBindings();
     resolveSelectionFromDraft(currentDraft(), false);
+    try { noteResult(s.ms.getState().result); } catch (e) {}
     try { s.ms.subscribe(onDraftChange); } catch (e) {}
     try { s.ps.subscribe(onPresetChange); } catch (e) {}
     return true;
@@ -1791,9 +1879,11 @@
     var dataIn = docPresetData(doc);
     if (!dataIn || !presetDataOk(dataIn)) { toastErr('The cloud copy of ' + doc.ign + ' is not a valid preset'); return null; }
     var cur = presetMap()[key];
+    if (cur && presetDataOk(cur.data)) pushHistory(key, 'keep', cur.data);
     key = writeSlot(key, dataIn, (cur && cur.label) || doc.ign);
     if (!key) return null;
     bindSlot(key, doc.ign || cloud.bindings[key].ign, doc);
+    pushHistory(key, 'pull', dataIn);
     if (selectedKey() === key) { loadIntoForm(key); renderTrigger(); updateIcon(); }
     return key;
   }
@@ -1807,7 +1897,7 @@
     var body = {
       preset: { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: slot.label || b.ign, data: slot.data },
       label: slot.label || b.ign,
-      meta: { 'class': m.classKo, level: m.level, hexaStat: m.hexaStat }
+      meta: { 'class': m.classKo, level: m.level, hexaStat: (slot.data.hexa && Number(slot.data.hexa.hexaStat)) || 0, hexaConverted: m.hexa || null }
     };
     var headers = {};
     if (b.cloudUpdatedAt && opts.ifMatch !== false) headers['If-Match'] = '"' + b.cloudUpdatedAt + '"';
@@ -1817,21 +1907,22 @@
       if (r.ok) {
         var up = (r.json && r.json.updatedAt) || r.etag || nowIso();
         b.cloudUpdatedAt = up; b.remoteUpdatedAt = up; b.syncedHash = hashData(slot.data); b.syncedAt = nowIso();
+        pushHistory(key, 'upload', slot.data);
         cloud.conflictToastKey = null; cloud.listAt = 0; saveBindings(); updateIcon();
-        if (!opts.quiet) toastOk('Uploaded ' + b.ign + ' to the cloud');
+        if (!opts.quiet) toastOk('Uploaded to the cloud');
         if (cb) cb(true);
       } else if (r.status === 409) {
         var remote = r.json ? r.json.updatedAt : undefined;
         if (remote === null) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; } else if (remote) b.remoteUpdatedAt = remote;
         saveBindings(); updateIcon();
-        if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud — click the sync icon to compare');
+        if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud. Click the sync icon to compare.');
         if (cb) cb(false);
       } else {
-        toastErr(r.status === 429 ? 'The cloud is rate-limiting uploads — try again in a minute'
+        toastErr(r.status === 429 ? 'The cloud is rate limiting uploads. Try again in a minute.'
           : 'Cloud upload failed (' + r.status + (r.json && r.json.error ? ' ' + r.json.error : '') + ')');
         if (cb) cb(false);
       }
-    }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable — upload skipped'); updateIcon(); if (cb) cb(false); });
+    }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable. Upload skipped.'); updateIcon(); if (cb) cb(false); });
   }
 
   /* -- dialogs --------------------------------------------------------------------------- */
@@ -1851,10 +1942,10 @@
     if (a !== b && !(a == null && b == null)) out.push({ path: path, a: a, b: b });
   }
   function fmtVal(v) {
-    if (v === '' || v == null) return '—';
+    if (v === '' || v == null) return 'empty';
     if (typeof v === 'string' && HANGUL.test(v)) v = classEn(v);
     var s = typeof v === 'string' ? v : JSON.stringify(v);
-    return s.length > 22 ? s.slice(0, 21) + '…' : s;
+    return s.length > 22 ? s.slice(0, 21) + '...' : s;
   }
   function infoCard(body, heading, lines) {
     var card = el('div', 'outline outline-outline-gray-med rounded-lg px-3 py-2 flex flex-col gap-0.5 text-left');
@@ -1869,24 +1960,24 @@
     var lm = slotMeta(o.localData), cm = docMeta(o.doc), cloudData = docPresetData(o.doc);
     var diffs = []; if (cloudData) leafDiff(o.localData, cloudData, '', diffs);
     msDialog({
-      title: o.title || (o.ign + ' exists in the cloud'),
-      subtitle: o.subtitle || 'Choose which version to keep.',
+      title: o.title || (o.ign + ' already exists in the cloud'),
+      subtitle: o.subtitle || '',
       build: function (body, close) {
-        infoCard(body, 'Local — ' + (o.localLabel || o.ign), [metaLine(lm),
-          'Edited ' + relTime(o.localSavedAt) + ' · last uploaded ' + relTime(o.localSyncedAt)]);
-        infoCard(body, 'Cloud — ' + o.doc.ign, [metaLine(cm),
+        infoCard(body, 'Your inputs', [metaLine(lm),
+          'Edited ' + relTime(o.localSavedAt) + ', uploaded ' + relTime(o.localSyncedAt)]);
+        infoCard(body, 'Cloud copy', [metaLine(cm),
           'Updated ' + relTime(o.doc.updatedAt) + (o.doc.updatedAt ? ' (' + shortDate(o.doc.updatedAt) + ')' : '')]);
         if (diffs.length) {
           var box = el('div', 'flex flex-col gap-0.5 text-left');
-          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + ' field' + (diffs.length === 1 ? '' : 's') + ' differ' + (diffs.length === 1 ? 's' : '') + ' (local → cloud)'));
-          diffs.slice(0, 8).forEach(function (d) { box.appendChild(el('span', 'text-text-gray-low text-xs truncate', d.path + ': ' + fmtVal(d.a) + ' → ' + fmtVal(d.b))); });
-          if (diffs.length > 8) box.appendChild(el('span', 'text-text-gray-low text-xs', '… and ' + (diffs.length - 8) + ' more'));
+          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + ' field' + (diffs.length === 1 ? '' : 's') + ' differ' + (diffs.length === 1 ? 's' : '') + ' (yours to cloud)'));
+          diffs.slice(0, 8).forEach(function (d) { box.appendChild(el('span', 'text-text-gray-low text-xs truncate', d.path + ': ' + fmtVal(d.a) + ' to ' + fmtVal(d.b))); });
+          if (diffs.length > 8) box.appendChild(el('span', 'text-text-gray-low text-xs', 'and ' + (diffs.length - 8) + ' more'));
           body.appendChild(box);
-        } else if (cloudData) body.appendChild(el('span', CLS.hint, 'Both versions hold the same inputs.'));
+        } else if (cloudData) body.appendChild(el('span', CLS.hint, 'Same inputs on both sides.'));
         var list = el('div', CLS.list);
-        list.appendChild(msRow('Overwrite cloud with current inputs', 'Your local version replaces ' + o.doc.ign + ' in the cloud', function () { close(); o.onOverwriteCloud(); }));
-        list.appendChild(msRow('Replace local with cloud version', 'The cloud copy is loaded into the form', function () { close(); o.onReplaceLocal(); }));
-        if (o.onSaveAsNew) list.appendChild(msRow('Keep both: save cloud copy as a new preset', 'Nothing is uploaded or overwritten', function () { close(); o.onSaveAsNew(); }));
+        list.appendChild(msRow('Upload my inputs', 'Replaces the cloud copy', function () { close(); o.onOverwriteCloud(); }));
+        list.appendChild(msRow('Use cloud copy', 'Loads it into the form', function () { close(); o.onReplaceLocal(); }));
+        if (o.onSaveAsNew) list.appendChild(msRow('Keep both', 'Saves the cloud copy as a new preset', function () { close(); o.onSaveAsNew(); }));
         body.appendChild(list);
         var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button';
         cancel.addEventListener('click', function () { close(); });
@@ -1900,20 +1991,35 @@
     var info = syncInfo(), key = info.key, b = info.b, map = presetMap();
     switch (info.state) {
       case 'none': openPicker(); return;
-      case 'off': openPicker(); toastOk('Cloud sync is off — toggle it in the list footer'); return;
+      case 'off': openPicker(); toastOk('Cloud sync is off.'); return;
       case 'unlinked': openAddDialog(map[key] && IGN_RE.test(map[key].label || '') ? map[key].label : '', { linkKey: key }); return;
       case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
       case 'synced': checkRemote(key, function (r) { if (r && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
       case 'not-uploaded':
-        confirmDialog('Upload ' + b.ign + ' to the cloud?', metaLine(slotMeta(map[key].data)) + ' · anyone with the IGN can load it.', 'Upload', function () { uploadSlot(key, { ifMatch: false }); });
+        confirmDialog('Upload to the cloud?', '', 'Upload', function () { uploadSlot(key, { ifMatch: false }); });
         return;
       case 'local-ahead':
-        confirmDialog('Upload your changes to ' + b.ign + '?', 'Edited ' + relTime(b.savedAt) + ' · last uploaded ' + relTime(b.syncedAt) + '.', 'Upload', function () {
-          uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
-        });
+        msDialog({ title: 'Upload changes to the cloud?', subtitle: '', build: function (body, close) {
+          var row = el('div', 'flex w-full gap-2');
+          var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); return x; };
+          mk('Cancel', CLS.ghost, null);
+          mk('Discard', CLS.ghost + ' text-red-500', function () { discardToCloud(key); });
+          mk('Upload', CLS.primary, function () { uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); });
+          body.appendChild(row);
+        } });
         return;
       default: openCompareForSlot(key); return;
     }
+  }
+  // Throw away local edits: the cloud copy replaces the slot and the form.
+  function discardToCloud(key) {
+    var b = cloud.bindings[key]; if (!b || !b.ign) return;
+    flushAutosave();
+    fetchDoc(b.ign, function (err, doc) {
+      if (err) { toastErr(err.offline ? 'Cloud unavailable' : 'Could not read ' + b.ign + ' from the cloud'); return; }
+      if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud. Nothing to restore.'); return; }
+      if (applyCloudDoc(key, doc)) toastOk('Restored from the cloud');
+    });
   }
   function openCompareForSlot(key) {
     var b = cloud.bindings[key], slot = presetMap()[key];
@@ -1921,17 +2027,17 @@
     flushAutosave();
     fetchDoc(b.ign, function (err, doc) {
       if (err) { toastErr(err.offline ? 'Cloud unavailable' : 'Could not read ' + b.ign + ' from the cloud'); return; }
-      if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud — click the icon to upload it again'); return; }
+      if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud. Click the icon to upload it again.'); return; }
       slot = presetMap()[key];
       compareDialog({
         ign: b.ign, doc: doc, localData: slot.data, localLabel: slotName(key, slot), localSavedAt: slot.savedAt, localSyncedAt: b.syncedAt,
-        title: b.ign + ': local and cloud differ',
+        title: b.ign + ' differs from the cloud',
         onOverwriteCloud: function () { b.cloudUpdatedAt = doc.updatedAt; saveBindings(); uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); },
-        onReplaceLocal: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud version of ' + b.ign); },
+        onReplaceLocal: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
         onSaveAsNew: function () {
           var d = docPresetData(doc); if (!d) return;
           var nk = writeSlot(null, d, doc.ign + ' (cloud)');
-          if (nk) { toastOk('Saved the cloud version as Preset ' + nk); }
+          if (nk) { toastOk('Saved the cloud copy as Preset ' + nk); }
         }
       });
     });
@@ -1949,29 +2055,42 @@
     if (!presetDataOk(localData)) { toastErr('Enter a class and level first'); return; }
     msDialog({
       title: linkKey ? 'Link ' + slotName(linkKey, map[linkKey]) + ' to an IGN' : 'Add character',
-      subtitle: linkKey ? 'The preset keeps its inputs and is renamed to the IGN.' : 'Saves the current inputs as a new character.',
+      subtitle: linkKey ? 'Renames this preset to the IGN.' : 'Starts a new character from the current inputs. Upload it later from the sync icon.',
       build: function (body, close) {
-        var input = el('input', CLS.input); input.setAttribute('maxlength', '16'); input.placeholder = 'IGN (GMS)'; input.value = prefill || '';
+        var input = el('input', CLS.input); input.setAttribute('maxlength', '16'); input.placeholder = 'IGN'; input.value = prefill || '';
         input.setAttribute('autocapitalize', 'off'); input.setAttribute('spellcheck', 'false');
         body.appendChild(input);
         var err = el('span', 'text-red-500 text-xs text-center'); err.hidden = true; body.appendChild(err);
-        body.appendChild(el('span', CLS.hint, metaLine(slotMeta(localData)) + (cloudEnabled() ? ' · the cloud is public: anyone with the IGN can view or overwrite it' : '')));
+        body.appendChild(el('span', CLS.hint, metaLine(slotMeta(localData))));
         var go = function () {
           var ign = input.value.trim();
-          if (!IGN_RE.test(ign)) { err.textContent = 'GMS IGNs only: 1–16 letters or digits'; err.hidden = false; input.focus(); return; }
+          if (!IGN_RE.test(ign)) { err.textContent = '1 to 16 letters or digits'; err.hidden = false; input.focus(); return; }
           var existing = bindingByIgn(ign);
-          if (existing && existing.key !== linkKey) {
-            close();
-            confirmDialog(ign + ' is already linked to ' + slotName(existing.key, map[existing.key]), 'Select that character instead?', 'Select it', function () { setSelected(existing.key, true); });
-            return;
-          }
+          if (existing && existing.key !== linkKey) { close(); openExistsLocally(ign, existing.key, localData); return; }
           close(); addCharacter(ign, linkKey, localData);
         };
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-        msActions(body, 'Cancel', function () { close(); }, 'Continue', go);
+        msActions(body, 'Cancel', function () { close(); }, 'Add', go);
         setTimeout(function () { input.focus(); input.select(); }, 30);
       }
     });
+  }
+  // The IGN is already one of the saved characters: overwrite it with these inputs, or switch to it.
+  function openExistsLocally(ign, key, localData) {
+    var map = presetMap(), slot = map[key]; if (!slot) return;
+    var b = cloud.bindings[key];
+    msDialog({ title: ign + ' already exists', subtitle: metaLine(slotMeta(slot.data)) + ', saved ' + relTime(slot.savedAt), build: function (body, close) {
+      var list = el('div', CLS.list);
+      list.appendChild(msRow('Overwrite with these inputs', b && b.cloudUpdatedAt ? 'The cloud copy is uploaded too' : 'Replaces the saved preset', function () {
+        close();
+        if (!writeDraftToSlot(key, localData)) return;
+        setSelected(key, false, true);
+        if (b && b.ign) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); else toastOk('Overwritten');
+      }));
+      list.appendChild(msRow('Switch to it', 'Loads the saved preset into the form', function () { close(); setSelected(key, true); }));
+      body.appendChild(list);
+      var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
+    } });
   }
   function addCharacter(ign, linkKey, localData) {
     var sel = selectedKey();
@@ -1983,18 +2102,17 @@
       return key;
     };
     if (!cloudEnabled()) {
-      confirmDialog('Save the current inputs as ' + ign + '?', 'Cloud sync is off, so this stays in this browser.', 'Save', function () { if (bindLocal(null)) toastOk('Saved ' + ign); });
+      confirmDialog('Add ' + ign + '?', 'Saved in this browser only.', 'Add', function () { if (bindLocal(null)) toastOk('Saved ' + ign); });
       return;
     }
     fetchDoc(ign, function (err, doc) {
       if (err) {
-        confirmDialog('Cloud unavailable', 'Save ' + ign + ' locally now? It can be uploaded later from the sync icon.', 'Save locally', function () { if (bindLocal(null)) toastOk('Saved ' + ign + ' (not uploaded)'); });
+        confirmDialog('Cloud unavailable', 'Save ' + ign + ' locally and upload it later from the sync icon?', 'Save locally', function () { if (bindLocal(null)) toastOk('Saved ' + ign + '. Not uploaded yet.'); });
         return;
       }
       if (!doc) {
-        confirmDialog('Save current inputs as ' + ign + ' and upload to the cloud?', metaLine(slotMeta(localData)) + ' · anyone with the IGN can load it.', 'Save & upload', function () {
-          var key = bindLocal(null); if (!key) return;
-          uploadSlot(key, { ifMatch: false });
+        confirmDialog('Add ' + ign + '?', 'Starts it from the current inputs. Upload it later from the sync icon.', 'Add', function () {
+          if (bindLocal(null)) toastOk('Added. Click the sync icon to upload.');
         });
         return;
       }
@@ -2006,7 +2124,7 @@
         onSaveAsNew: linkKey ? null : function () {
           var d = docPresetData(doc); if (!d) return;
           var nk = writeSlot(null, d, ign); if (!nk) return;
-          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved ' + ign + ' from the cloud as a new preset');
+          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved the cloud copy of ' + ign + ' as a new preset');
         }
       });
     });
@@ -2026,13 +2144,203 @@
     });
   }
 
+  /* -- history: the last 10 saves of each character, restorable locally -------------------- */
+  var LS_CLOUD_HISTORY = 'msfix:cloud:history', HISTORY_MAX = 10, HISTORY_EDIT_GAP_MS = 120000;
+  var WHY = { upload: 'Uploaded', edit: 'Saved', pull: 'Cloud copy', keep: 'Before a change', restore: 'Restored', import: 'Imported' };
+  var histCache = null;
+  function histMap() { if (!histCache) histCache = lsJson(LS_CLOUD_HISTORY, {}); return histCache; }
+  function histKey(key) { var b = cloud.bindings[key]; if (b && b.ign) return b.ign.toLowerCase(); var s = presetMap()[key]; return 'slot:' + ((s && s.label) || key); }
+  function saveHist() {
+    var m = histMap();
+    for (var tries = 0; tries < 8; tries++) {
+      try { lsSet(LS_CLOUD_HISTORY, JSON.stringify(m)); return; }
+      catch (e) {   // storage quota: drop the oldest snapshot anywhere and retry
+        var ok = null, oi = -1, oat = null;
+        for (var k in m) for (var i = 0; i < m[k].length; i++) if (!oat || m[k][i].at < oat) { oat = m[k][i].at; ok = k; oi = i; }
+        if (ok === null) return;
+        m[ok].splice(oi, 1); if (!m[ok].length) delete m[ok];
+      }
+    }
+  }
+  // Rapid edits collapse into the latest "Saved" entry (one per two minutes); every other kind
+  // of save gets its own entry. Identical content never creates a duplicate.
+  function pushHistory(key, why, data) {
+    if (!data || !presetDataOk(data)) return;
+    var hk = histKey(key), m = histMap(), list = m[hk] || (m[hk] = []), h = hashData(data);
+    if (list.length && list[0].hash === h) { if (why !== 'edit') list[0].why = why; list[0].at = nowIso(); saveHist(); return; }
+    if (why === 'edit' && list.length && list[0].why === 'edit' && Date.now() - new Date(list[0].at).getTime() < HISTORY_EDIT_GAP_MS) {
+      list[0] = { at: nowIso(), why: 'edit', hash: h, data: clone(data) }; saveHist(); return;
+    }
+    list.unshift({ at: nowIso(), why: why, hash: h, data: clone(data) });
+    while (list.length > HISTORY_MAX) list.pop();
+    saveHist();
+  }
+  function historyFor(key) { return histMap()[histKey(key)] || []; }
+  function moveHistory(fromKey, toKey) { if (fromKey === toKey) return; var m = histMap(); if (m[fromKey]) { m[toKey] = m[fromKey]; delete m[fromKey]; saveHist(); } }
+  function openHistory(key) {
+    closePicker();
+    var slot = presetMap()[key]; if (!slot) return;
+    var list = historyFor(key), cur = hashData(slot.data);
+    msDialog({ title: 'History', subtitle: list.length ? 'Pick a save to load it into the form. Nothing is uploaded.' : 'No saves yet.', build: function (body, close) {
+      var box = el('div', CLS.list);
+      list.forEach(function (h, i) {
+        var same = h.hash === cur;
+        box.appendChild(msRow((WHY[h.why] || 'Saved') + ' ' + relTime(h.at) + (i === 0 ? ' (latest)' : ''), metaLine(slotMeta(h.data)) + (same ? ', same as now' : ''), function () { close(); restoreHistory(key, h); }));
+      });
+      body.appendChild(box);
+      var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
+    } });
+  }
+  function restoreHistory(key, h) {
+    var slot = presetMap()[key]; if (!slot) return;
+    if (hashData(slot.data) === h.hash) { toastOk('That is the current version'); return; }
+    if (selectedKey() === key) flushAutosave();
+    pushHistory(key, 'keep', presetMap()[key].data);
+    if (!writeSlot(key, h.data, slot.label)) return;
+    if (selectedKey() === key) loadIntoForm(key); else setSelected(key, true, true);
+    pushHistory(key, 'restore', h.data);
+    renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+    toastOk('Loaded the save from ' + relTime(h.at) + '. Upload it from the sync icon if you want it in the cloud.');
+  }
+
+  /* -- row actions: overwrite / rename / delete local / delete cloud ---------------------- */
+  function overwriteFromDraft(key) {
+    var slot = presetMap()[key]; if (!slot) return;
+    var d = currentDraft(); if (!d || !presetDataOk(d)) { toastErr('Enter a class and level first'); return; }
+    var name = slotName(key, slot), b = cloud.bindings[key];
+    confirmDialog('Overwrite this character?', 'The current inputs replace the saved character' + (b && b.ign && b.cloudUpdatedAt ? ' and its cloud copy.' : '.'), 'Overwrite', function () {
+      if (cloud.selected && cloud.selected.key === key) flushAutosave();
+      pushHistory(key, 'keep', slot.data);
+      if (!writeDraftToSlot(key, d)) return;
+      pushHistory(key, 'edit', d);
+      setSelected(key, false, true);
+      if (b && b.ign) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); else toastOk('Overwritten');
+    });
+  }
+  function renameSlot(key) {
+    var slot = presetMap()[key]; if (!slot) return;
+    var b = cloud.bindings[key], cur = b && b.ign ? b.ign : (IGN_RE.test(slot.label || '') ? slot.label : '');
+    msDialog({ title: 'Rename', subtitle: b && b.ign && b.cloudUpdatedAt ? 'The cloud copy keeps the old name until you upload under the new one.' : '', build: function (body, close) {
+      var input = el('input', CLS.input); input.setAttribute('maxlength', '16'); input.placeholder = 'IGN'; input.value = cur;
+      input.setAttribute('autocapitalize', 'off'); input.setAttribute('spellcheck', 'false'); body.appendChild(input);
+      var err = el('span', 'text-red-500 text-xs text-center'); err.hidden = true; body.appendChild(err);
+      var go = function () {
+        var ign = input.value.trim();
+        if (!IGN_RE.test(ign)) { err.textContent = '1 to 16 letters or digits'; err.hidden = false; input.focus(); return; }
+        var other = bindingByIgn(ign); if (other && other.key !== key) { err.textContent = ign + ' is already another character'; err.hidden = false; return; }
+        close();
+        var same = !!(b && b.ign && eqi(b.ign, ign));
+        var wasSelected = !!(cloud.selected && cloud.selected.key === key);
+        var oldHist = histKey(key);
+        // Keep the binding and the selection in step with the new label BEFORE the store changes,
+        // so the reconciler (label/savedAt matching) does not drop them on the way through.
+        if (b) b.label = ign; if (wasSelected) cloud.selected.label = ign; saveBindings();
+        var m2 = clone(presetMap()); if (!m2[key]) return; m2[key].label = ign; if (!setPresetMap(m2)) return;
+        bindSlot(key, ign, null);
+        moveHistory(oldHist, histKey(key));
+        if (wasSelected) setSelected(key, false, true);
+        renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+        toastOk('Renamed to ' + ign + (same || !cloudEnabled() ? '' : '. Click the sync icon to upload it.'));
+      };
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+      msActions(body, 'Cancel', function () { close(); }, 'Rename', go);
+      setTimeout(function () { input.focus(); input.select(); }, 30);
+    } });
+  }
+  function deleteLocalSlot(key) {
+    var slot = presetMap()[key]; if (!slot) return;
+    var name = slotName(key, slot), b = cloud.bindings[key];
+    confirmDialog('Delete this character?', 'Removes the local preset.' + (b && b.ign && b.cloudUpdatedAt ? ' The cloud copy stays.' : ''), 'Delete', function () {
+      var s = cloudStores(); if (!s) return;
+      if (cloud.selected && cloud.selected.key === key) { if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; } cloud.selected = null; }
+      var hm = histMap(); delete hm[histKey(key)]; saveHist();
+      delete cloud.bindings[key]; saveBindings();
+      try { s.ps.getState().deletePreset(key); } catch (e) { toastErr('Could not delete the preset'); return; }
+      reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+      toastOk('Deleted');
+    });
+  }
+  function deleteCloud(key) {
+    var b = cloud.bindings[key]; if (!b || !b.ign) return;
+    confirmDialog('Delete from the cloud?', 'The local preset stays.', 'Delete from cloud', function () {
+      busy(1);
+      cloudFetch('DELETE', cloudPath(b.ign), { headers: { 'X-Confirm': b.ign } }).then(function (r) {
+        busy(-1);
+        if (r.ok || r.status === 404) {
+          b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; b.syncedHash = null; b.syncedAt = null; saveBindings(); updateIcon(); if (picker.open) renderDropdown();
+          toastOk('Deleted from the cloud');
+        } else toastErr('Could not delete ' + b.ign + ' from the cloud (' + r.status + ')');
+      }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable'); updateIcon(); });
+    });
+  }
+  // Download a saved character as a native preset file (with "ign" so importing re-links it).
+  function downloadSlotJson(key) {
+    var slot = presetMap()[key]; if (!slot || !presetDataOk(slot.data)) { toastErr('Nothing to download'); return; }
+    var b = cloud.bindings[key], ign = b && b.ign ? b.ign : null, name = ign || slot.label || autoPresetLabel(slot.data) || ('preset-' + key);
+    var file = { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: slot.label || name, data: slot.data };
+    if (ign) file.ign = ign;
+    var blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'scouter-character-' + String(name).replace(/[\/\\:*?"<>|\s]+/g, '_') + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 60000);
+    toastOk('Downloaded ' + a.download);
+  }
+  function openRowMenu(key) {
+    closePicker();
+    var slot = presetMap()[key]; if (!slot) return;
+    var b = cloud.bindings[key], name = slotName(key, slot), inCloud = !!(b && b.ign && b.cloudUpdatedAt);
+    msDialog({ title: name, subtitle: metaLine(slotMeta(slot.data)), build: function (body, close) {
+      // Compact: icon + one word each, two per row; destructive ones in red.
+      var grid = el('div', 'grid w-full grid-cols-2 gap-2');
+      var act = function (icon, label, extra, fn) {
+        var x = el('button', CLS.ghost + (extra ? ' ' + extra : '')); x.type = 'button';
+        x.innerHTML = svgIcon(icon); x.appendChild(el('span', '', label));
+        x.addEventListener('click', function () { close(); fn(); });
+        grid.appendChild(x);
+      };
+      act('save', 'Overwrite', '', function () { overwriteFromDraft(key); });
+      act('pencil', b && b.ign ? 'Rename' : 'Set IGN', '', function () { if (b && b.ign) renameSlot(key); else openAddDialog(IGN_RE.test(slot.label || '') ? slot.label : '', { linkKey: key }); });
+      act('download', 'Download', '', function () { downloadSlotJson(key); });
+      act('history', 'History', '', function () { openHistory(key); });
+      act('trash', 'Delete', 'text-red-500', function () { deleteLocalSlot(key); });
+      if (inCloud) act('cloud-off', 'Delete from cloud', 'text-red-500 col-span-2', function () { deleteCloud(key); });
+      body.appendChild(grid);
+      var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
+    } });
+  }
+  // "Import JSON…": a native or legacy preset file becomes a character (or overwrites one).
+  function importJsonFlow() {
+    closePicker();
+    pickJsonFile(function (txt) {
+      var parsed = parsePresetFile(txt);
+      var usable = parsed ? parsed.presets.filter(function (p) { return presetDataOk(p.data); }) : [];
+      if (!usable.length) { toastErr("This isn't a MapleScouter preset file"); return; }
+      pickPreset(usable, function (p) {
+        var data = conformTo(currentUserStatTemplate(), p.data);
+        var ign = p.ign || (IGN_RE.test(p.label || '') ? p.label : null);
+        var existing = ign ? bindingByIgn(ign) : null;
+        var finish = function (key, what) { if (ign) bindSlot(key, ign, null); setSelected(key, true, true); toastOk(what + ' ' + (ign || p.label || 'preset')); };
+        if (!existing) { var k = writeSlot(null, data, ign || p.label || autoPresetLabel(data)); if (k) finish(k, 'Imported'); return; }
+        msDialog({ title: ign + ' already exists', subtitle: 'The file contains ' + metaLine(slotMeta(data)) + '.', build: function (body, close) {
+          var list = el('div', CLS.list);
+          list.appendChild(msRow('Replace it', 'The file replaces the saved preset', function () { close(); var old = presetMap()[existing.key]; if (old) pushHistory(existing.key, 'keep', old.data); var k2 = writeSlot(existing.key, data, ign); if (k2) { pushHistory(k2, 'import', data); finish(k2, 'Replaced'); } }));
+          list.appendChild(msRow('Import as a new preset', 'Keeps both', function () { close(); var k3 = writeSlot(null, data, ign + ' (file)'); if (k3) { setSelected(k3, true, true); toastOk('Imported ' + ign + ' as a new preset'); } }));
+          body.appendChild(list);
+          var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
+        } });
+      });
+    });
+  }
+
   /* -- the picker (combobox + sync icon) ------------------------------------------------- */
   var SOFT_BASE = CLS.soft.replace(' text-text-gray-high', '');
   var picker = { el: null, input: null, dd: null, icon: null, live: null, open: false, filter: '', active: -1, items: [], mountPoll: null };
   var C_INPUT = 'placeholder:text-muted-gray-low outline-outline-gray-med bg-surface-gray-surface-0 flex h-8 min-w-0 rounded-[4px] px-3 py-1 text-sm outline transition-[color,box-shadow] md:text-sm focus:outline-outline-gray-high focus:shadow-[0px_0px_0px_3px_rgba(0,0,0,0.20)] w-[216px] pr-8';
-  var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[300px] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
+  var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[340px] max-w-[92vw] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
   var C_SECTION = 'text-text-gray-low px-2 py-1 text-[11px] font-semibold tracking-wide';
-  var C_OPT = 'msfix-opt relative flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none hover:bg-surface-gray-surface-1 text-left';
+  var C_OPT = 'msfix-opt relative flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none text-left';
+  var C_OPT_HOVER = ' hover:bg-surface-gray-surface-1', C_OPT_SELECTED = ' bg-surface-gray-surface-1 hover:bg-surface-gray-surface-2', C_OPT_ACTIVE = 'bg-surface-gray-surface-2';
   var C_BADGE = 'ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ';
   var C_DIVIDER = 'border-outline-gray-med my-1 border-t';
   var C_FOOT_BTN = 'flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1 text-xs hover:bg-surface-gray-surface-1 text-left';
@@ -2041,7 +2349,7 @@
     var wrap = el('div', 'msfix-charpicker flex items-center gap-2'); wrap.setAttribute('data-msfix-ui', '');
     var rel = el('div', 'relative');
     var input = el('input', C_INPUT);
-    input.type = 'text'; input.placeholder = 'Choose a character…';
+    input.type = 'text'; input.placeholder = 'Choose a character...';
     input.setAttribute('role', 'combobox'); input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-autocomplete', 'list');
     input.setAttribute('aria-controls', 'msfix-charlist'); input.setAttribute('aria-haspopup', 'listbox'); input.setAttribute('aria-label', 'Character');
     input.setAttribute('autocomplete', 'off'); input.setAttribute('spellcheck', 'false'); input.setAttribute('autocapitalize', 'off');
@@ -2049,6 +2357,7 @@
     var dd = el('div', C_DD); dd.id = 'msfix-charlist'; dd.setAttribute('role', 'listbox'); dd.hidden = true;
     rel.appendChild(input); rel.appendChild(chev); rel.appendChild(dd);
     var icon = el('button', SOFT_BASE + ' msfix-sync text-text-gray-low'); icon.type = 'button';
+    attachTooltip(icon);
     var live = el('span', 'sr-only'); live.setAttribute('aria-live', 'polite');
     wrap.appendChild(rel); wrap.appendChild(icon); wrap.appendChild(live);
 
@@ -2058,6 +2367,8 @@
     input.addEventListener('keydown', onPickerKey);
     dd.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep focus in the input
     dd.addEventListener('click', function (e) {
+      var act = e.target && e.target.closest ? e.target.closest('[data-msfix-act]') : null;
+      if (act && dd.contains(act)) { e.preventDefault(); e.stopPropagation(); if (act.getAttribute('data-msfix-act') === 'menu') openRowMenu(act.getAttribute('data-msfix-key')); return; }
       var t = e.target && e.target.closest ? e.target.closest('[data-msfix-idx]') : null;
       if (!t || !dd.contains(t)) return;
       e.preventDefault(); e.stopPropagation();
@@ -2071,8 +2382,8 @@
     var key = selectedKey(), map = presetMap();
     var name = key && map[key] ? slotName(key, map[key]) : '';
     picker.input.setAttribute('data-msfix-selected', key || '');
-    if (picker.open) { picker.input.placeholder = name || 'Search or add a character…'; return; }
-    picker.input.value = name; picker.input.placeholder = 'Choose a character…';
+    if (picker.open) { picker.input.placeholder = name || 'Search or add a character...'; return; }
+    picker.input.value = name; picker.input.placeholder = 'Choose a character...';
     picker.input.title = name;
   }
   function openPicker() {
@@ -2080,7 +2391,6 @@
     picker.open = true; picker.filter = ''; picker.active = -1;
     picker.input.value = ''; picker.input.setAttribute('aria-expanded', 'true');
     renderTrigger(); picker.dd.hidden = false; renderDropdown();
-    refreshCloudList(true);   // the cached list renders at once; a fresh one replaces it when it lands
   }
   function closePicker() {
     if (!picker.dd || !picker.open) return;
@@ -2093,6 +2403,7 @@
     if (e.key === 'Escape') { if (picker.open) { e.preventDefault(); e.stopPropagation(); closePicker(); picker.input.blur(); } return; }
     if (e.key === 'Tab') { closePicker(); return; }
     if (!picker.open) { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); openPicker(); } return; }
+    if (e.key === 'ArrowRight' && picker.active >= 0 && picker.items[picker.active] && picker.items[picker.active].type === 'local') { e.preventDefault(); openRowMenu(picker.items[picker.active].key); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive(n ? (picker.active + 1) % n : -1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(n ? (picker.active - 1 + n) % n : -1); }
     else if (e.key === 'Home') { e.preventDefault(); setActive(n ? 0 : -1); }
@@ -2108,111 +2419,79 @@
     picker.active = i;
     for (var k = 0; k < picker.items.length; k++) {
       var it = picker.items[k]; if (!it.el) continue;
-      if (k === i) { it.el.classList.add('msfix-active'); picker.input.setAttribute('aria-activedescendant', it.el.id); if (it.el.scrollIntoView) try { it.el.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
-      else it.el.classList.remove('msfix-active');
+      if (k === i) { it.el.classList.add('msfix-active'); it.el.classList.add(C_OPT_ACTIVE); picker.input.setAttribute('aria-activedescendant', it.el.id); if (it.el.scrollIntoView) try { it.el.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+      else { it.el.classList.remove('msfix-active'); it.el.classList.remove(C_OPT_ACTIVE); }
     }
     if (i < 0) picker.input.removeAttribute('aria-activedescendant');
   }
   function activateItem(i) {
     var it = picker.items[i]; if (!it) return;
     if (it.type === 'local') { closePicker(); picker.input.blur(); setSelected(it.key, true); }
-    else if (it.type === 'cloud') { picker.input.blur(); selectCloudOnly(it.ign); }
+    else if (it.type === 'cloud-lookup') { picker.input.blur(); selectCloudOnly(it.ign); }
     else if (it.type === 'add') { picker.input.blur(); openAddDialog(IGN_RE.test(picker.filter.trim()) ? picker.filter.trim() : ''); }
-    else if (it.type === 'retry') { cloud.listErr = false; refreshCloudList(true); }
-    else if (it.type === 'toggle-cloud') { lsSet(LS_CLOUD_ENABLED, cloudEnabled() ? 'false' : 'true'); if (cloudEnabled()) { cloud.offline = false; refreshCloudList(true); startPolling(); } else { stopPolling(); cloud.list = null; } renderDropdown(); updateIcon(); }
-    else if (it.type === 'toggle-auto') { lsSet(LS_CLOUD_AUTO, autoUploadOn() ? 'false' : 'true'); renderDropdown(); }
-    else if (it.type === 'native-load' || it.type === 'native-save') {
-      closePicker(); picker.input.blur();
-      var t = nativeTrigger(it.type === 'native-load' ? 'load' : 'save');
-      if (t) t.click(); else toastErr('The preset window is not available');
-    }
+    else if (it.type === 'import') { picker.input.blur(); importJsonFlow(); }
+    else if (it.type === 'download') { closePicker(); picker.input.blur(); downloadSlotJson(it.key); }
   }
   function badge(kind) {
-    var b = el('span', C_BADGE + (kind === 'cloud' ? 'bg-green-600 text-white' : 'bg-surface-gray-surface-2 text-text-gray-low'), kind);
-    if (kind === 'cloud') b.className += ' ml-1'; return b;
+    return el('span', 'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ' + (kind === 'cloud' ? 'bg-green-600 text-white' : 'bg-surface-gray-surface-2 text-text-gray-low'), kind);
   }
-  function optionEl(idx, main, sub, badges, selected) {
-    var d = el('div', C_OPT); d.setAttribute('role', 'option'); d.id = 'msfix-opt-' + idx; d.setAttribute('data-msfix-idx', String(idx));
+  // A row: name + chips (+ a menu button for saved characters), then one or two wrapping lines.
+  // The selected row is marked by the accent bar + background (CSS on aria-selected), nothing else.
+  function optionEl(idx, main, sub1, sub2, badges, selected, menuKey) {
+    var d = el('div', C_OPT + (selected ? ' msfix-selected' + C_OPT_SELECTED : C_OPT_HOVER)); d.setAttribute('role', 'option'); d.id = 'msfix-opt-' + idx; d.setAttribute('data-msfix-idx', String(idx));
     d.setAttribute('aria-selected', selected ? 'true' : 'false');
     var top = el('div', 'flex w-full items-center gap-2');
-    var m = el('span', 'truncate font-medium', main); m.title = main; top.appendChild(m);
-    var first = true;
-    (badges || []).forEach(function (k) { var b = badge(k); if (first) { b.className = b.className.replace(' ml-1', ''); first = false; } else b.className = b.className.replace('ml-auto ', ''); top.appendChild(b); });
+    var m = el('span', 'min-w-0 flex-1 truncate ' + (selected ? 'font-semibold' : 'font-medium'), main); m.title = main; top.appendChild(m);
+    (badges || []).forEach(function (k) { top.appendChild(badge(k)); });
+    if (menuKey) {
+      var kb = el('button', 'msfix-row-menu shrink-0 rounded-sm p-0.5 text-text-gray-low hover:bg-surface-gray-surface-2 hover:text-text-gray-high'); kb.type = 'button';
+      kb.setAttribute('data-msfix-act', 'menu'); kb.setAttribute('data-msfix-key', menuKey); kb.setAttribute('aria-label', 'Actions for ' + main); kb.title = 'More actions';
+      kb.innerHTML = svgIcon('ellipsis'); top.appendChild(kb);
+    }
     d.appendChild(top);
-    if (sub) d.appendChild(el('span', 'text-text-gray-low w-full truncate text-xs', sub));
+    if (sub1) d.appendChild(el('span', 'text-text-gray-low w-full text-xs whitespace-normal break-words', sub1));
+    if (sub2) d.appendChild(el('span', 'text-text-gray-low w-full text-xs whitespace-normal break-words', sub2));
     return d;
   }
   function renderDropdown() {
     if (!picker.dd || !picker.open) return;
     var dd = picker.dd; dd.innerHTML = ''; picker.items = [];
-    var q = picker.filter.trim().toLowerCase();
-    var map = presetMap(), keys = slotKeys(map), sel = selectedKey(), enabled = cloudEnabled();
-    var match = function (parts) { if (!q) return true; for (var i = 0; i < parts.length; i++) if (parts[i] && String(parts[i]).toLowerCase().indexOf(q) !== -1) return true; return false; };
+    var q = picker.filter.trim(), ql = q.toLowerCase();
+    var map = presetMap(), keys = slotKeys(map), sel = selectedKey();
+    var match = function (parts) { if (!ql) return true; for (var i = 0; i < parts.length; i++) if (parts[i] && String(parts[i]).toLowerCase().indexOf(ql) !== -1) return true; return false; };
     var addItem = function (item, node) { item.el = node; picker.items.push(item); return node; };
-    var section = function (label) { var g = el('div'); g.setAttribute('role', 'group'); g.setAttribute('aria-label', label); g.appendChild(el('div', C_SECTION, label)); dd.appendChild(g); return g; };
     var divider = function () { dd.appendChild(el('div', C_DIVIDER)); };
-    var boundIgns = {}, rows = 0;
 
-    // LOCAL — every saved slot (untouched level-0 slots are noise and stay out)
-    var locals = [];
+    // One list: every saved character, with chips for where it lives. The cloud is never
+    // listed wholesale — a character is fetched only when its IGN is typed.
+    dd.appendChild(el('div', C_SECTION, 'Characters'));
+    var rows = 0, typedIsLocal = false;
     keys.forEach(function (k) {
       var s = map[k]; if (!s || !presetDataOk(s.data)) return;
       var b = cloud.bindings[k], m = slotMeta(s.data), name = slotName(k, s);
-      if (b && b.ign) boundIgns[b.ign.toLowerCase()] = true;
+      if (b && b.ign && ql && b.ign.toLowerCase() === ql) typedIsLocal = true;
       if (!match([name, s.label, b && b.ign, m.classEn, m.classKo])) return;
-      var sub = metaLine(m) + ' · saved ' + relTime(s.savedAt);
-      if (b && b.ign && b.cloudUpdatedAt) sub += ' · cloud ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt);
-      locals.push({ k: k, name: name, sub: sub, badges: b && b.ign && b.cloudUpdatedAt ? ['local', 'cloud'] : ['local'], selected: k === sel });
+      var inCloud = !!(b && b.ign && b.cloudUpdatedAt);
+      var when = 'saved ' + relTime(s.savedAt) + (inCloud ? ', cloud ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt) : '');
+      dd.appendChild(addItem({ type: 'local', key: k }, optionEl(picker.items.length, name, metaLine(m), when, inCloud ? ['local', 'cloud'] : ['local'], k === sel, k)));
+      rows++;
     });
-    if (locals.length) {
-      var g = section('LOCAL');
-      locals.forEach(function (l) { g.appendChild(addItem({ type: 'local', key: l.k }, optionEl(picker.items.length, l.name, l.sub, l.badges, l.selected))); rows++; });
+    if (!rows) dd.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', ql ? 'No saved character matches' : 'No saved characters yet'));
+    divider();
+    if (ql && IGN_RE.test(q) && !typedIsLocal) {
+      dd.appendChild(addItem({ type: 'cloud-lookup', ign: q }, optionEl(picker.items.length, 'Load ' + q + ' from the cloud', 'Loads that character by IGN', '', ['cloud'], false)));
     }
-    // CLOUD — characters not already linked locally (linked ones are merged into their LOCAL row)
-    if (enabled) {
-      var g2 = section('CLOUD'), shown = 0, hidden = 0;
-      if (cloud.list) {
-        for (var i = 0; i < cloud.list.length; i++) {
-          var c = cloud.list[i]; if (boundIgns[c.ign.toLowerCase()]) continue;
-          var cm = docMeta(c);
-          if (!match([c.ign, c.label, cm.classEn, cm.classKo])) continue;
-          if (q.length < 2 && shown >= 10) { hidden++; continue; }
-          g2.appendChild(addItem({ type: 'cloud', ign: c.ign }, optionEl(picker.items.length, c.ign + (c.label && !eqi(c.label, c.ign) ? ' · ' + c.label : ''), metaLine(cm) + ' · updated ' + relTime(c.updatedAt), ['cloud'], false)));
-          shown++; rows++;
-        }
-      }
-      if (cloud.listBusy && !cloud.list) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'Loading…'));
-      else if (cloud.listErr || (cloud.offline && !cloud.list)) g2.appendChild(addItem({ type: 'retry' }, optionEl(picker.items.length, 'Cloud unavailable — retry', '', [], false)));
-      else if (!shown) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', q ? 'No cloud characters match' : 'No other characters in the cloud'));
-      if (hidden) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', hidden + ' more — type 2+ letters to search'));
-    }
-    if (!rows && q && !enabled) dd.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'No matches'));
-    if (!locals.length && !q) dd.insertBefore(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'No saved characters yet'), dd.firstChild);
-    if (rows || enabled) divider();
-    var addRow = optionEl(picker.items.length, '+ Add character', q && IGN_RE.test(picker.filter.trim()) ? 'Save the current inputs as ' + picker.filter.trim() : 'Save the current inputs under an IGN', [], false);
-    dd.appendChild(addItem({ type: 'add' }, addRow));
-
-    // footer: toggles, the native windows, and the public-cloud reminder
+    dd.appendChild(addItem({ type: 'add' }, optionEl(picker.items.length, '+ Add character', ql && IGN_RE.test(q) ? 'Start ' + q + ' from the current inputs' : 'Start a new character from the current inputs', '', [], false)));
     divider();
     var foot = el('div', 'flex flex-col gap-0.5 px-1 pb-1');
-    var toggle = function (type, label, on) {
-      var b = el('button', C_FOOT_BTN); b.type = 'button'; b.setAttribute('data-msfix-idx', String(picker.items.length)); b.setAttribute('data-msfix-toggle', type);
-      b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', on ? 'true' : 'false'); b.id = 'msfix-opt-' + picker.items.length;
-      b.appendChild(el('span', '', label));
-      b.appendChild(el('span', 'font-semibold ' + (on ? 'text-green-600' : 'text-text-gray-low'), on ? 'on' : 'off'));
-      foot.appendChild(addItem({ type: type }, b));
-    };
-    toggle('toggle-cloud', 'Cloud sync', enabled);
-    if (enabled) toggle('toggle-auto', 'Auto-upload changes', autoUploadOn());
-    var manage = el('div', 'flex items-center gap-1 px-1 pt-1');
-    manage.appendChild(el('span', 'text-text-gray-low text-xs', 'Presets:'));
-    [['native-load', 'Load window'], ['native-save', 'Save window']].forEach(function (p) {
-      var b = el('button', 'cursor-pointer rounded-sm px-1.5 py-0.5 text-xs underline hover:bg-surface-gray-surface-1', p[1]); b.type = 'button';
-      b.id = 'msfix-opt-' + picker.items.length; b.setAttribute('data-msfix-idx', String(picker.items.length));
-      manage.appendChild(addItem({ type: p[0] }, b));
-    });
-    foot.appendChild(manage);
-    if (enabled) foot.appendChild(el('span', 'text-text-gray-low px-1 text-[10px]', 'Cloud is public: anyone can view or overwrite an IGN.'));
+    var imp = el('button', C_FOOT_BTN); imp.type = 'button'; imp.id = 'msfix-opt-' + picker.items.length; imp.setAttribute('data-msfix-idx', String(picker.items.length));
+    imp.appendChild(el('span', '', 'Import JSON...')); var ic = el('span', 'text-text-gray-low'); ic.innerHTML = svgIcon('file-up'); imp.appendChild(ic);
+    foot.appendChild(addItem({ type: 'import' }, imp));
+    if (sel && map[sel]) {
+      var dl = el('button', C_FOOT_BTN); dl.type = 'button'; dl.id = 'msfix-opt-' + picker.items.length; dl.setAttribute('data-msfix-idx', String(picker.items.length));
+      dl.appendChild(el('span', '', 'Download JSON...')); var dic = el('span', 'text-text-gray-low'); dic.innerHTML = svgIcon('download'); dl.appendChild(dic);
+      foot.appendChild(addItem({ type: 'download', key: sel }, dl));
+    }
     dd.appendChild(foot);
     setActive(picker.active >= 0 && picker.active < picker.items.length ? picker.active : -1);
   }

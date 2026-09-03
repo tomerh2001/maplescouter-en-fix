@@ -27,18 +27,19 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 - **Player and character names are never touched** — IGNs, rankings, and user posts stay exactly as they are.
 - Korean-only API content that can't be translated (the Latest Updates changelog) is hidden in English mode instead of showing raw Korean.
 
-### Characters & cloud sync (Manual Input page) — new in 1.5.0
-The site's **Load Preset / Save Preset** buttons on `/input` are replaced by a **Character picker** and a **sync icon** (the native windows are still one click away in the picker's footer).
-- **Auto-save.** Every preset slot is a character. Pick one and whatever you type into the form is saved into that slot as you go — no more Save window. Switching characters loads the other slot into the form instantly, without a reload.
-- **Cloud sync** with [scouter.tomerh2001.com](https://scouter.tomerh2001.com) so the same character is available from any browser:
-  - **+ Add character** asks for the IGN, saves the current inputs under it and uploads them. If that IGN already exists in the cloud you get a comparison (class/level/HEXA, dates, the exact fields that differ) and choose: overwrite the cloud, replace your local copy, or keep both.
-  - The **sync icon** shows the state of the selected character — not uploaded, synced, edited since the last upload, cloud copy newer, or conflict — and does the right thing when clicked (upload, pull, or compare). It re-checks the cloud every 30 s and whenever the tab regains focus.
-  - Cloud-only characters appear in the list; selecting one imports it as a local preset and loads it.
-  - Uploads are explicit unless you turn on **Auto-upload changes** (picker footer, off by default; uploads 3 s after you stop typing, with conflict detection).
-  - **Cloud sync: on/off** in the footer. Off means zero network calls — the picker and auto-save keep working locally.
-  - The cloud is **public and unauthenticated by design**: anyone who knows an IGN can load or overwrite it, and the list of characters is visible to everyone. Don't store anything you consider private.
-- **Export carries the IGN.** Save-as-JSON files of a linked preset contain `"ign"`, and importing such a file links the new preset again. (Because the native Save window is hidden here, the IGN is asked for when you add a character rather than when you save.)
-- Renaming a linked preset in the site's Save window unlinks it; two browser tabs editing the same character are last-writer-wins.
+### Characters and cloud sync (Manual Input page), 1.5.x
+The site's **Load Preset / Save Preset** buttons and the IGN search on `/input` are replaced by a **Characters** picker and a **sync icon**.
+- **One list, chips for where a character lives.** Every saved preset is a row: name, class , level , **HEXA** (the site's HEXA-converted stat, filled in once you press Result), when it was saved and when its cloud copy changed, with `local` / `cloud` chips. The selected character is highlighted.
+- **Auto-save.** Pick a character and everything you type is saved into it as you go. Switching characters loads the other one instantly, without a reload.
+- **Row menu (⋯ or → on a row):** overwrite it with the current inputs, rename / set its IGN, delete the local preset, delete it from the cloud.
+- **+ Add character** starts a new character from the current inputs (local until you upload it). If that IGN already exists locally you choose to overwrite it or switch to it; if it exists in the cloud you get a comparison (class/level/HEXA, dates, the exact fields that differ) and choose: upload yours, use the cloud copy, or keep both.
+- **Cloud by IGN, never a directory.** Type an IGN in the search box to load that character from [scouter.tomerh2001.com](https://scouter.tomerh2001.com); the extension never lists other people's characters.
+- **Sync icon** with a proper tooltip: not uploaded, synced, edited since the last upload, cloud copy newer, or conflict. click it to upload, pull, or compare. It re-checks every 30 s and on focus. Uploads are always explicit (no auto-upload).
+- **Import JSON...** in the picker footer imports a native or old-format preset file; a file that carries an `ign` which already exists offers to replace it.
+- **History.** The row menu keeps the last 10 saves of each character (uploads, edits, cloud pulls, and what was there before an overwrite). Pick one to load it into the form locally; upload it from the sync icon if you want it in the cloud.
+- **Adding a character keeps it local.** "+ Add character" saves the current inputs under the IGN in this browser; the sync icon shows "not uploaded" until you click it.
+- The cloud is **public and unauthenticated by design**: anyone who knows an IGN can load or overwrite it. Don't store anything you consider private.
+- **Export carries the IGN.** Save-as-JSON files of a linked preset contain `"ign"`, and importing such a file links the new preset again.
 
 ### Quality of life
 - **Remembers your language.** The site redirects every fresh visit to Korean; the script sends you back to your language automatically.
