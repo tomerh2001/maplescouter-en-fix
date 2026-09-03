@@ -20,7 +20,12 @@ div:has(> [id^="slot-"]) {
 /* Sponsor banners (Boomback etc.) and any /next/ads/ creatives */
 a[href*="boomback.com"],
 a:has(> img[src*="/next/ads/"]),
-img[src*="/next/ads/"] {
+img[src*="/next/ads/"],
+img[src*="next%2Fads"] {
+  display: none !important;
+}
+/* Venatus popup ad modal (React-owned, so it is hidden here and never removed) */
+div#popup.fixed.inset-0 {
   display: none !important;
 }
 /* NOTICE bar (rotating sponsored billboard / promo marquee) — both page variants */

@@ -216,7 +216,6 @@ dict['Analysis&Optimization'] = 'Analysis';
 dict['Ranking&Challenge'] = 'Rankings';
 dict['Information Center'] = 'Info Center';
 dict['M.Attack'] = 'Magic Attack';
-dict['M.ATT'] = 'Magic Attack';
 dict['Crit Rate (In Combat)'] = 'Critical Rate';
 dict['Boss Dmg + Dmg%'] = 'Boss Damage + Damage';
 dict['Ignore guard'] = 'IED';
@@ -225,8 +224,10 @@ dict['Ignore Dff(380)'] = 'IED (380)';
 // compact seconds unit for the inline cooldown field (en.json fold says 'Second')
 dict['초'] = 's';
 i18nPatch['초'] = 's';
-dict['Manual Input (Character Stats)'] = 'Manual Input';
-dict['Enter Directly (Character Stats Changes)'] = 'Manual Input';
+// the 직접 입력 page is 'Character' now (see FORCE); keep the English-key aliases in step
+dict['Manual Input (Character Stats)'] = 'Character';
+dict['Enter Directly (Character Stats Changes)'] = 'Character';
+dict['Input'] = 'Character';
 for (const [oldV, newV] of [
   ['6-Player Min Spec', '6 Players'], ['6P Min', '6 Players'],
   ['4-Player Min Spec', '4 Players'], ['4P Min', '4 Players'],
@@ -263,8 +264,20 @@ const FORCE = {
   // v1.5.1: the page is a character workspace now (picker + cloud), not a bare form.
   '직접 입력': 'Character',
   '직접입력': 'Character',
+  // guide sentences and the class-not-found error must point at the same page name
+  '도핑을 포함한 방무, 보공, 뎀퍼는 스탯창 최소수치는 직접입력에서 X표시가 나올 시 확인 가능.': 'For IED, Boss Damage, and Damage % (including consumables), the minimum stat-window values can be checked when an X mark appears on the Character page.',
+  '직접입력 시 도핑 관련 경고창 확인 부탁드립니다. (누락 시, 페널티가 적용될 수 있습니다.': 'Please check the consumables warning popup on the Character page. (If anything is missing, a penalty may be applied.',
+  '제공된 직업은 직접입력 시 "챌린지"버튼에 체크하여 사용. 본인 직업에 버튼이 없다면 제공되지 않은 것입니다': 'For the listed classes, check the "Challenge" button on the Character page to use it. If your class has no button, it is not supported',
+  '직접입력 제출 시 경고 문구 확인하여 문제가 있을 경우 해소하거나 입증해야 합니다.': 'When submitting from the Character page, check the warning messages and resolve or justify any issues.',
+  '반드시 직접 입력 시 사용한 직접입력 페이지와 챌린지 검증 결과 페이지 스크린샷을 첨부해주세요.': 'Be sure to attach screenshots of the Character page you used and the Challenge Verification result page.',
+  '직업 정보가 확인되지 않습니다. 캐릭터를 검색하시거나 직접입력에서 골라주세요.': 'Class information could not be found. Please search for your character or select a class on the Character page.',
+  '하야토, 칸나 링크는 직접입력에 더해서 입력해주세요.': 'Please add the Hayato and Kanna Link Skills on top of the Character page.',
   '수기 입력 결과': 'Character Result',
   '수기 입력 결과가 없습니다': 'No character result yet',
+  // preset window titles: title case, matching "Save Preset" and "Load Preset"
+  '프리셋 불러오기': 'Load Preset',
+  '프리셋 덮어쓰기': 'Overwrite Preset',
+  '프리셋 삭제': 'Delete Preset',
 
   // 내실 → "Core Skills" (user preference over "Foundation"), kept consistent everywhere
   '내실': 'Core Skills',
@@ -288,6 +301,25 @@ for (const [k, v] of Object.entries(FORCE)) { dict[k] = v; i18nPatch[k] = v; }
 // also override the site's own en.json values (rendered via i18next) if the keys differ there
 i18nPatch['내실메이커'] = 'Core Skills Maker';
 i18nPatch['내실'] = 'Core Skills';
+
+// The DOM layer applies exact dict hits to any text, including strings the
+// i18n patch itself emits. Drop every non-Hangul EN→EN rule whose key is a value
+// the finished patch renders (e.g. 쉬움 → 'Easy', 옵션 → 'Option', 마 → 'M.ATT'),
+// otherwise the patch output is rewritten as soon as it lands in the DOM.
+const emitted = new Set(Object.values(i18nPatch));
+for (const k of Object.keys(dict)) {
+  if (!hangul.test(k) && emitted.has(k) && dict[k] !== k) delete dict[k];
+}
+// The DOM layer applies each entry once, so a legacy EN→EN entry whose value is
+// itself a key ("6p Min Cut" → "6-Player Min Spec" → "6 Players") would stop one
+// hop short of the intended wording. Collapse those chains to their last hop.
+// Hangul keys are left alone: their first hop is the reviewed translation.
+for (const k of Object.keys(dict)) {
+  if (hangul.test(k)) continue;
+  let v = dict[k], n = 0;
+  while (n++ < 5 && typeof dict[v] === "string" && dict[v] !== v && dict[v] !== k) v = dict[v];
+  if (v !== dict[k]) { console.log("chain collapsed:", k, "->", dict[k], "->", v); dict[k] = v; }
+}
 
 fs.mkdirSync(DATA, { recursive: true });
 fs.writeFileSync(path.join(DATA, 'i18n-patch.json'), JSON.stringify(i18nPatch, null, 1));

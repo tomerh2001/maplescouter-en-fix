@@ -1,22 +1,22 @@
 // ==UserScript==
-// @name         MapleScouter English Fix
+// @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.5.3
-// @description  Complete English translations for maplescouter.com (GMS-context, not literal), a character picker with auto-save + cloud sync for the Manual Input page, and it remembers your language & server (GMS/KMS) selections.
+// @version      1.6.0
+// @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
 // @match        https://maplescouter.com/*
 // @match        https://www.maplescouter.com/*
 // @run-at       document-start
 // @grant        none
-// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.5.3
+// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.6.0
 // @updateURL    https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @downloadURL  https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @supportURL   https://github.com/tomerh2001/maplescouter-en-fix/issues
 // ==/UserScript==
 
 /*
- * How it works (3 layers):
+ * How it works (4 layers):
  * 1. i18n bundle patch  — intercepts the site's webpack chunk that carries en/common.json
  *    and merges in ~3,600 missing/corrected translations, so everything rendered through
  *    i18next comes out as proper GMS English.
@@ -25,9 +25,10 @@
  *    in the app or returned by the Nexon API (equipment names, etc.).
  * 3. Persistence        — remembers your last language (/en, /ko, …) and your server/region
  *    selection (GMS/KMS/JMS/TMS/MSEA) across visits and windows.
- * 4. Cloud characters   — on the Manual Input page, a character picker replaces the site's
- *    Load/Save Preset buttons: inputs auto-save into the selected preset, and presets linked
- *    to an IGN sync with scouter.tomerh2001.com (explicit upload, opt-in auto-upload).
+ * 4. Cloud characters   — on the Character page (formerly Manual Input), a character picker replaces
+ *    the site's Load/Save Preset buttons: inputs auto-save into the selected character, characters
+ *    linked to an IGN can be uploaded to or loaded from scouter.tomerh2001.com (uploads are explicit,
+ *    never automatic), and the last 10 saves are kept as history you can restore.
  */
 
 (function () {
@@ -78,15 +79,15 @@
   // The site stores the selection in localStorage key "region" (zustand persist). If the
   // site ever wipes or resets it (version bumps, errors), restore it from our backup.
 
-  var REGIONS = ['kms', 'gms', 'jms', 'tms', 'msea'];
-
+  // Any non-empty string region counts as valid. The site may add new region ids later,
+  // and we must never revert a real selection to a stale backup because of an allowlist.
   function readSiteRegion() {
     try {
       var raw = localStorage.getItem('region');
       if (!raw) return null;
       var parsed = JSON.parse(raw);
       var r = parsed && parsed.state && parsed.state.region;
-      return REGIONS.indexOf(r) !== -1 ? { region: r, raw: raw } : null;
+      return (typeof r === 'string' && r) ? { region: r, raw: raw } : null;
     } catch (e) { return null; }
   }
 
@@ -102,6 +103,7 @@
     try {
       var backup = localStorage.getItem(LS_REGION);
       if (!backup) return;
+      // Only restore when the site key is missing, unparsable, or has no region string.
       if (!readSiteRegion()) localStorage.setItem('region', backup);
     } catch (e) {}
   }
@@ -396,7 +398,7 @@
     var s = document.createElement('span');
     s.className = 'msfix-credit';
     s.textContent = 'Patched by Tomerh2001';
-    s.title = 'English patch by tomerh2001 — click for the source';
+    s.title = 'MapleScouter Enhancements by tomerh2001. Click for the source.';
     var force = function (k, v) { s.style.setProperty(k, v, 'important'); };
     force('position', 'absolute');
     force('left', indent + 'px');
@@ -460,25 +462,69 @@
   // The site validates an imported preset's data against its CURRENT schema and throws on any
   // missing key. Old files were exported against an older schema, so deep-conform their data
   // to the shape of a current, live userStat (fills any keys added since) before handing it over.
-  function conformTo(template, data) {
+  // Values are kept whenever they can be read as the template's type (a number stored as
+  // "2", a "true" flag, ...), and an array keeps its entries one by one. Only a value that
+  // cannot be read at all falls back to the template. Every such fallback is listed in the
+  // optional `report` array ({path, from, to}) so the caller can tell the user.
+  function conformTo(template, data, report, path) {
+    path = path || '';
     if (Array.isArray(template)) {
-      return (Array.isArray(data) && data.length === template.length)
-        ? template.map(function (t, i) { return conformTo(t, data[i]); })
-        : template;
+      if (!Array.isArray(data)) { if (data !== null && data !== undefined) conformNote(report, path, data, template); return template.slice(); }
+      if (data.length > template.length) conformNote(report, path, data.slice(template.length), []);
+      return template.map(function (t, i) { return i < data.length ? conformTo(t, data[i], report, path + '[' + i + ']') : t; });
     }
     if (template && typeof template === 'object') {
       var out = {};
-      for (var k in template) {
-        out[k] = (data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, k))
-          ? conformTo(template[k], data[k]) : template[k];
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        for (var k in template) {
+          out[k] = Object.prototype.hasOwnProperty.call(data, k)
+            ? conformTo(template[k], data[k], report, path ? path + '.' + k : k) : template[k];
+        }
+      } else {
+        if (data !== null && data !== undefined) conformNote(report, path, data, template);
+        for (var k2 in template) out[k2] = template[k2];
       }
       return out;
     }
-    return (data !== null && data !== undefined && typeof data === typeof template) ? data : template;
+    if (data === null || data === undefined) return template;
+    var v = coerceLike(template, data);
+    if (v === undefined) { conformNote(report, path, data, template); return template; }
+    return v;
+  }
+  function conformNote(report, path, from, to) { if (report) report.push({ path: path, from: from, to: to }); }
+  // Read `data` as the same JS type as `template`. Returns undefined when that is impossible.
+  function coerceLike(template, data) {
+    if (typeof data === typeof template) return data;
+    if (typeof template === 'string') {
+      if (typeof data === 'number' && isFinite(data)) return String(data);
+      if (typeof data === 'boolean') return String(data);
+      return undefined;
+    }
+    if (typeof template === 'number') {
+      if (typeof data === 'string' && data.trim() !== '' && isFinite(Number(data))) return Number(data);
+      if (typeof data === 'boolean') return data ? 1 : 0;
+      return undefined;
+    }
+    if (typeof template === 'boolean') {
+      if (data === 'true' || data === 1 || data === '1') return true;
+      if (data === 'false' || data === 0 || data === '0') return false;
+      return undefined;
+    }
+    return undefined;
+  }
+  // One toast for everything conformTo had to reset, e.g. "2 fields in this file were reset".
+  function conformToast(report, where) {
+    if (!report || !report.length) return;
+    var n = report.length;
+    try { if (DEBUG_REFS) console.warn('[msfix] conform: reset ' + n + ' field(s) in ' + where, report); } catch (e) {}
+    toastErr(n + (n === 1 ? ' field' : ' fields') + ' in ' + where + ' could not be read and ' + (n === 1 ? 'was' : 'were') + ' reset');
   }
 
-  // A current, schema-current userStat to use as the conform template (preset slot > live build).
+  // A current, schema-current userStat to use as the conform template. The site's own default
+  // userStat comes first, so a missing field is filled with the site default and never with
+  // another character's value (site default > preset slot > live build).
   function currentUserStatTemplate() {
+    if (siteRefs.defaultUserStat) return siteRefs.defaultUserStat;
     try {
       var pr = JSON.parse(localStorage.getItem('preset'));
       var slots = pr && pr.state && pr.state.preset;
@@ -545,7 +591,8 @@
         data: obj.data,
         label: typeof obj.label === 'string' ? obj.label : '',
         savedAt: typeof obj.savedAt === 'string' ? obj.savedAt : null,
-        ign: typeof obj.ign === 'string' && IGN_RE.test(obj.ign) ? obj.ign : null   // our export enrichment (4d)
+        ign: typeof obj.ign === 'string' && IGN_RE.test(obj.ign) ? obj.ign : null,  // our export enrichment (4d)
+        meta: obj.meta && typeof obj.meta === 'object' ? obj.meta : null              // hexaConverted, as in the cloud document
       }] };
     }
     return null;
@@ -566,6 +613,19 @@
     if (!d || !d.stat || !d.stat.myClass) return false;
     var lv = Number(d.stat.level);
     return isFinite(lv) && lv > 0 && lv <= 300;
+  }
+  // The site accepts any number, so a stray digit (Main Stat % 4831 instead of 832) would be saved
+  // and synced as is. These limits sit far above any real character, so only a typo trips them,
+  // and it is caught before it spreads to the cloud and to every other device.
+  function statWarnings(d) {
+    var st = (d && d.stat) || {}, out = [];
+    var n = function (k) { var v = Number(st[k]); return isFinite(v) ? v : 0; };
+    if (n('mainStatPer') > 3000) out.push('Main Stat % is ' + st.mainStatPer + '. The site cannot calculate above about 3000.');
+    else if (n('mainStatBase') * (1 + n('mainStatPer') / 100) + n('mainStatAbs') > 300000) out.push('Total main stat comes to about ' + fmtNum(n('mainStatBase') * (1 + n('mainStatPer') / 100) + n('mainStatAbs')) + '. No character has that much.');
+    if (n('subStatPer') > 3000) out.push('Sub Stat % is ' + st.subStatPer + '. The site cannot calculate above about 3000.');
+    if (n('bossDmg') > 2000) out.push('Boss Damage is ' + st.bossDmg + '%. That is far above any real character.');
+    if (n('ignoreDef') > 100) out.push('Ignore Defense is ' + st.ignoreDef + '%. It cannot go above 100.');
+    return out;
   }
   function shortDate(s) {
     if (!s) return '';
@@ -607,7 +667,7 @@
     soft: "inline-flex items-center cursor-pointer justify-center whitespace-nowrap text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 bg-surface-gray-surface-2 text-text-gray-high hover:bg-surface-gray-surface-3 h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
     primary: "inline-flex items-center cursor-pointer justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 bg-primary text-text-gray-white hover:bg-surface-primary-primary-hover h-9 px-4 py-2 has-[>svg]:px-3 flex-1",
     ghost: 'inline-flex items-center cursor-pointer justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all outline outline-outline-gray-med text-text-gray-high hover:bg-surface-gray-surface-1 h-9 px-4 py-2 flex-1',
-    input: 'placeholder:text-muted-gray-low outline-outline-gray-med bg-surface-gray-surface-0 flex w-full min-w-0 rounded-[4px] text-sm outline transition-[color,box-shadow] md:text-sm h-8 px-2 py-[5.5px] focus:outline-outline-gray-high',
+    input: 'outline-outline-gray-med bg-surface-gray-surface-0 flex w-full min-w-0 rounded-[4px] text-sm outline transition-[color,box-shadow] md:text-sm h-8 px-2 py-[5.5px] focus:outline-outline-gray-high',
     footer: 'border-outline-gray-med flex flex-col gap-2 border-t pt-3',
     close: 'absolute top-4 right-4 cursor-pointer rounded-xs opacity-70 transition-opacity hover:opacity-100',
     iconGroup: 'absolute top-1/2 right-2 flex -translate-y-1/2 gap-1',
@@ -638,20 +698,42 @@
 
     var handle = {};
     dlgStack.push(handle);
+    // Keyboard users: focus moves into the window when it opens, Tab stays inside it, and the
+    // element that had focus gets it back when the window closes. The picker input is restored
+    // quietly (its focus handler would otherwise reopen the dropdown).
+    var prevFocus = document.activeElement;
+    box.tabIndex = -1;
+    function focusables() {
+      var all = box.querySelectorAll('input,button,select,textarea,a[href]'), out = [];
+      for (var i = 0; i < all.length; i++) if (!all[i].disabled && !all[i].hidden && all[i].offsetParent !== null) out.push(all[i]);
+      return out;
+    }
     function isTop() { return dlgStack[dlgStack.length - 1] === handle; }
     function close() {
       var i = dlgStack.indexOf(handle);
       if (i !== -1) dlgStack.splice(i, 1);
       window.removeEventListener('keydown', onKey, true);
+      var hadFocus = box.contains(document.activeElement);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       if (box.parentNode) box.parentNode.removeChild(box);
+      if (!hadFocus || !prevFocus || !prevFocus.focus || !document.contains(prevFocus)) return;
+      if (prevFocus === picker.input) picker.quietFocus = true;
+      try { prevFocus.focus(); } catch (e) {}
+      picker.quietFocus = false;
     }
     function cancel() { if (!isTop()) return; close(); if (opts.onCancel) opts.onCancel(); }
     // Escape must dismiss ONLY the front-most window. The site's dialog listens on document,
     // so we take the key on `window` — which captures first — and stop it dead there.
+    // Tab wraps inside the front-most window instead of walking the page behind it.
     function onKey(e) {
-      if (e.key !== 'Escape' || !isTop()) return;
-      e.preventDefault(); e.stopImmediatePropagation(); cancel();
+      if (!isTop()) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); cancel(); return; }
+      if (e.key !== 'Tab') return;
+      var f = focusables(), cur = document.activeElement;
+      if (!f.length) { e.preventDefault(); box.focus(); return; }
+      if (!box.contains(cur)) { e.preventDefault(); (e.shiftKey ? f[f.length - 1] : f[0]).focus(); return; }
+      if (e.shiftKey && cur === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && cur === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
     }
     window.addEventListener('keydown', onKey, true);
     overlay.addEventListener('click', cancel);
@@ -682,6 +764,13 @@
 
     document.body.appendChild(overlay);
     document.body.appendChild(box);
+    // Move focus in: the first input, else the first real button (not the corner X), else the box.
+    setTimeout(function () {
+      if (!box.parentNode || box.contains(document.activeElement)) return;
+      var f = box.querySelector('input'), bs = focusables();
+      for (var i = 0; !f && i < bs.length; i++) if (bs[i] !== x) f = bs[i];
+      try { (f || box).focus(); } catch (e) {}
+    }, 0);
     return { close: close };
   }
 
@@ -713,13 +802,13 @@
     if (presets.length === 1) { cb(presets[0]); return; }
     msDialog({
       title: 'Select the character to import',
-      subtitle: 'This file holds ' + presets.length + ' saved presets.',
+      subtitle: 'This file holds ' + presets.length + ' saved characters.',
       onCancel: onCancel,
       build: function (body, close) {
         var list = document.createElement('div'); list.className = CLS.list;
         presets.forEach(function (p, i) {
           list.appendChild(msRow(
-            p.label || autoPresetLabel(p.data) || ('Preset ' + (i + 1)),
+            p.label || autoPresetLabel(p.data) || ('Character ' + (i + 1)),
             shortDate(p.savedAt),
             function () { close(); cb(p); }
           ));
@@ -735,13 +824,13 @@
     var auto = autoPresetLabel(p.data);
     var currentName = current ? (current.label || '') : '';
     msDialog({
-      title: 'Name for Preset ' + slotKey,
+      title: 'Name for slot ' + slotKey,
       subtitle: 'Pick a name, or type your own.',
       build: function (body, close) {
         var input = document.createElement('input');
         input.className = CLS.input;
         input.setAttribute('maxlength', '40');
-        input.placeholder = 'Preset name (auto if left blank)';
+        input.placeholder = 'Character name (auto if left blank)';
         input.value = fromFile || currentName || '';
         body.appendChild(input);
 
@@ -766,10 +855,10 @@
     var shown = label || autoPresetLabel(p.data);
     var currentName = current ? (current.label || (presetDataOk(current.data) ? autoPresetLabel(current.data) : '')) : '';
     msDialog({
-      title: isNew ? ('Add as Preset ' + slotKey + '?') : ('Overwrite Preset ' + slotKey + '?'),
+      title: isNew ? ('Add to slot ' + slotKey + '?') : ('Overwrite slot ' + slotKey + '?'),
       subtitle: isNew
-        ? (shown + ' will be saved as Preset ' + slotKey + '.')
-        : ('Preset ' + slotKey + (currentName ? ' (' + currentName + ')' : '') + ' will be replaced by ' + shown + '. This cannot be undone.'),
+        ? (shown + ' will be saved to slot ' + slotKey + '.')
+        : ('Slot ' + slotKey + (currentName ? ' (' + currentName + ')' : '') + ' will be replaced by ' + shown + '. This cannot be undone.'),
       build: function (body, close) {
         msActions(body, 'Cancel', function () { close(); },
           isNew ? 'Add preset' : 'Overwrite', function () { close(); applyPreset(p, slotKey, label); });
@@ -783,17 +872,18 @@
     var st = api.presetStore.getState();
     var map = {}, cur = st.preset || {};
     for (var k in cur) map[k] = cur[k];
-    var tmpl = currentUserStatTemplate();
+    var tmpl = currentUserStatTemplate(), report = [];
     // An unlabelled preset is captioned from whatever character is loaded right now, not from
     // the preset itself — which would show the wrong name here — so always store one.
     map[slotKey] = {
-      data: tmpl ? conformTo(tmpl, p.data) : p.data,
+      data: tmpl ? conformTo(tmpl, p.data, report) : p.data,
       label: label || autoPresetLabel(p.data),
       savedAt: new Date().toISOString()
     };
     try { st.setPreset(map); } catch (e) { toastErr('Could not save the preset'); return; }
+    conformToast(report, 'this file');
     if (p.ign && !bindingByIgn(p.ign)) bindSlot(slotKey, p.ign, null); // file carried an IGN: link the slot
-    toastOk('Preset ' + slotKey + ' updated' + (label ? ' (' + label + ')' : ''));
+    toastOk('Slot ' + slotKey + ' updated' + (label ? ' (' + label + ')' : ''));
     var closeBtn = document.querySelector('[data-slot=dialog-close]');
     if (closeBtn) closeBtn.click();
   }
@@ -846,7 +936,7 @@
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = CLS.iconBtn + ' msfix-row-import';
-    btn.title = 'Import from JSON file (overwrite this preset)';
+    btn.title = 'Import from JSON file (replace this slot)';
     btn.innerHTML = ICON_FILE_UP;
     btn.addEventListener('click', function (ev) {
       ev.preventDefault(); ev.stopPropagation();
@@ -1153,6 +1243,19 @@
     if (qAdded.size || qChar.size || qAttr.size) scheduleFlush();
   }
 
+  // Full-tree sweep that hides its own writes from the observer. A sweep that
+  // runs while the observer is attached re-queues every text node it rewrote and
+  // translates it a second time, so a dictionary entry whose value is itself a
+  // key ("6p Min Cut" -> "6-Player Min Spec" -> "6 Players") would show a
+  // different text after a navigation than on the first load.
+  function sweepTree(root) {
+    if (!observer) { processTree(root); return; }
+    observer.disconnect();
+    try { processTree(root); } finally {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
+    }
+  }
+
   function startDomLayer() {
     if (observer) return;
     // The observer is ALWAYS attached (even on /ko) so that switching language via
@@ -1252,12 +1355,14 @@
 
   /* ---------------- 4b. Ad removal ------------------------------------------------------ */
   // Static slots/banners are hidden by the injected CSS; popup ad modals are built
-  // dynamically, so we remove any fixed-position overlay that carries an ad creative.
+  // dynamically, so we hide any fixed-position overlay that carries an ad creative.
+  // Hidden, not removed: the popup is rendered inline by React (no portal), and React
+  // throws on unmount if the node was already detached from its parent.
   var REMOVE_ADS = true;
 
   function killAdPopups() {
     if (!REMOVE_ADS) return;
-    var imgs = document.querySelectorAll('img[src*="/next/ads/"], img[src*="files.maplescouter.com/next/ads"]');
+    var imgs = document.querySelectorAll('img[src*="/next/ads/"], img[src*="files.maplescouter.com/next/ads"], img[src*="next%2Fads"], img#popup-image');
     for (var i = 0; i < imgs.length; i++) {
       var el = imgs[i], overlay = null, p = el.parentElement;
       while (p && p !== document.body) {
@@ -1265,7 +1370,10 @@
         if (pos === 'fixed') overlay = p;
         p = p.parentElement;
       }
-      if (overlay) overlay.remove();
+      if (overlay && !overlay.__msfixHidden) {
+        overlay.__msfixHidden = true;
+        overlay.style.setProperty('display', 'none', 'important');
+      }
     }
   }
 
@@ -1275,8 +1383,8 @@
   // opens both windows). Every preset slot is a character: whatever you type into the form is
   // saved into the selected slot as you go, and a slot linked to an IGN can be uploaded to /
   // pulled from scouter.tomerh2001.com so the same character is available from any browser.
-  // Uploads stay explicit (the sync icon, or the add flow) unless the opt-in auto-upload
-  // toggle is on. Everything runs through the site's own zustand stores — `manual-store`
+  // Uploads are always explicit (the sync icon, or the add flow); nothing is uploaded on
+  // its own. Everything runs through the site's own zustand stores — `manual-store`
   // (the draft the form renders from) and `preset` (the slots) — captured passively while
   // webpack executes them (noteExports), so switching characters never needs a reload.
   //
@@ -1294,7 +1402,7 @@
   var LS_CLOUD_URL = 'msfix:cloud:url', LS_CLOUD_SLOTS = 'msfix:cloud:slots', LS_CLOUD_SELECTED = 'msfix:cloud:selected';
   var LS_CLOUD_ENABLED = 'msfix:cloud:enabled', LS_CLOUD_AUTO = 'msfix:cloud:auto';
   var IGN_RE = /^[A-Za-z0-9]{1,16}$/;
-  var AUTOSAVE_MS = 500, AUTOUPLOAD_MS = 3000, POLL_MS = 300000, POLL_MAX_MS = 900000, FOCUS_CHECK_GAP_MS = 60000, LIST_CACHE_MS = 2000, FETCH_TIMEOUT_MS = 10000;
+  var AUTOSAVE_MS = 500, AUTOUPLOAD_MS = 3000, POLL_MS = 300000, POLL_MAX_MS = 900000, FOCUS_CHECK_GAP_MS = 60000, FETCH_TIMEOUT_MS = 10000;
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -1317,7 +1425,8 @@
   var ROUTE_CSS = ROW_SEL + '{display:none!important}\n' + IGN_SEL + '{display:none!important}';
   var CLOUD_CSS = [
     '.msfix-charpicker [hidden]{display:none!important}',
-    '.msfix-charpicker .msfix-dd{top:100%}',
+    '.msfix-charpicker .msfix-dd{top:100%;max-width:92vw}',
+    '.msfix-charpicker input::placeholder,.msfix-dialog input::placeholder{color:var(--text-gray-low)}',
     '.msfix-charpicker .msfix-opt[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--color-primary,#e5772f)}',
     '.msfix-charpicker .msfix-row-menu{opacity:.55}.msfix-charpicker .msfix-opt:hover .msfix-row-menu,.msfix-charpicker .msfix-opt.msfix-active .msfix-row-menu,.msfix-charpicker .msfix-row-menu:focus{opacity:1}',
     '@media (prefers-reduced-motion: reduce){.msfix-charpicker .animate-spin{animation:none}}'
@@ -1392,16 +1501,15 @@
     return (siteRefs.manualStore && siteRefs.presetStore) ? { ms: siteRefs.manualStore, ps: siteRefs.presetStore } : null;
   }
   function presetMap() { var s = cloudStores(); if (!s) return {}; try { return s.ps.getState().preset || {}; } catch (e) { return {}; } }
-  function setPresetMap(map) { var s = cloudStores(); if (!s) return false; try { s.ps.getState().setPreset(map); return true; } catch (e) { toastErr('Could not write the preset'); return false; } }
+  function setPresetMap(map) { var s = cloudStores(); if (!s) return false; try { s.ps.getState().setPreset(map); return true; } catch (e) { toastErr('Could not save the character'); return false; } }
   function currentDraft() { var s = cloudStores(); if (!s) return null; try { return s.ms.getState().draftStat; } catch (e) { return null; } }
   function slotKeys(map) { return Object.keys(map).sort(function (a, b) { return (+a) - (+b); }); }
 
   /* -- bindings: slotKey -> { ign, label, savedAt, cloudUpdatedAt, remoteUpdatedAt, syncedHash, syncedAt } */
   var cloud = {
     bindings: {}, selected: null,       // selected = { key, ign, label, savedAt }
-    list: null, listAt: 0, listErr: false, listBusy: false,
     offline: false, busy: 0, subscribed: false, lastLoaded: null,
-    saveTimer: null, uploadTimer: null, pollTimer: null, pollDelay: POLL_MS, pendingImport: null, conflictToastKey: null
+    saveTimer: null, uploadTimer: null, pollTimer: null, pollDelay: POLL_MS, pendingImport: null, conflictToastKey: null, warnToastKey: null
   };
   function loadBindings() {
     var b = lsJson(LS_CLOUD_SLOTS, {}); cloud.bindings = (b && typeof b === 'object' && !Array.isArray(b)) ? b : {};
@@ -1420,11 +1528,16 @@
   function slotMatchesSel(s, sel) {
     if (!s) return false;
     if (sel.label) return eqi(s.label, sel.label) || (sel.ign && eqi(s.label, sel.ign));
-    return !!(sel.savedAt && s.savedAt === sel.savedAt);
+    if (sel.savedAt) return s.savedAt === sel.savedAt;
+    // A slot the site itself created has neither a label nor a savedAt until the first autosave
+    // writes one. Until then its inputs are the only thing that tells it apart (sel.hash).
+    return !s.label && !s.savedAt && !!sel.hash && hashData(s.data) === sel.hash;
   }
   // Slot keys are positional and the site renumbers them on delete, so bindings are matched
   // by content (label = IGN, or the savedAt we wrote) against the live map on every change.
-  function reconcileBindings() {
+  // noSave skips the write back. The cross-tab storage listener uses it because this tab's
+  // in-memory preset map may be older than the tab that wrote the bindings.
+  function reconcileBindings(noSave) {
     var map = presetMap(), keys = slotKeys(map), out = {}, used = {}, old = cloud.bindings;
     Object.keys(old).forEach(function (k) {
       var b = old[k]; if (!b || !b.ign) return;
@@ -1442,7 +1555,7 @@
       if (!key) cloud.selected = null;
       else { sel.key = key; sel.label = map[key].label || ''; if (map[key].savedAt) sel.savedAt = map[key].savedAt; sel.ign = out[key] ? out[key].ign : null; }
     }
-    saveBindings();
+    if (!noSave) saveBindings();
   }
   function selectedKey() { return cloud.selected ? cloud.selected.key : null; }
   function bindingByIgn(ign) { for (var k in cloud.bindings) if (cloud.bindings[k] && eqi(cloud.bindings[k].ign, ign)) return { key: k, binding: cloud.bindings[k] }; return null; }
@@ -1477,36 +1590,69 @@
     for (var k in d) { if (k === 'power') continue; if (k === 'hexa') { var hx = {}; for (var j in d.hexa || {}) if (HEXA_CORE_RE.test(j)) hx[j] = d.hexa[j]; c.hexa = hx; } else c[k] = d[k]; }
     return hashData(c);
   }
+  // The site can swap result.userStat without a recompute (the result page's setResultUserStat
+  // rewrites seed ring fields and keeps calculatedData). Cache each calculatedData object once,
+  // under the inputs it was computed for, so a stale HEXA never lands under a new input hash.
+  var lastNotedCd = null;
   function noteResult(res) {
     var cd = res && res.calculatedData, us = res && res.userStat;
     if (!cd || !us) return;
-    var v = Number(cd.boss300_hexaStat);
-    if (!isFinite(v) || v <= 0) return;
+    if (cd === lastNotedCd) return;
+    lastNotedCd = cd;
+    var v = Number(cd.boss300_hexaStat), plain = false;
+    if (!isFinite(v)) return;
+    // -3 with a normal boss300_stat means the character has no HEXA combat analysis on file. The
+    // site then falls back to the plain converted stat, so keep that one and mark it as plain.
+    if (v === -3) { var pv = Number(cd.boss300_stat); if (isFinite(pv) && pv > 0) { v = pv; plain = true; } }
+    // The site answers 201 even when it refuses the inputs: every result field then holds a
+    // negative code (-1..-7, the ones its own result page turns into an error label). Keep the
+    // code too, so the row can say why instead of "HEXA: press Result".
+    var err = v < 0 && v >= -7 && v === Math.round(v) ? v : 0;
+    if (!err && v <= 0) return;
     var h = hexaKey(us), m = hexaMap();
-    if (m[h] && m[h].v === Math.round(v)) return;
-    m[h] = { v: Math.round(v), at: nowIso() };
+    if (m[h] && m[h].v === (err ? 0 : Math.round(v)) && (m[h].err || 0) === err && !!m[h].plain === plain) return;
+    m[h] = err ? { v: 0, err: err, at: nowIso() } : plain ? { v: Math.round(v), plain: true, at: nowIso() } : { v: Math.round(v), at: nowIso() };
     var ks = Object.keys(m);
     if (ks.length > 80) { ks.sort(function (a, b) { return m[a].at < m[b].at ? -1 : 1; }); while (ks.length > 80) delete m[ks.shift()]; }
     lsSet(LS_CLOUD_HEXA, JSON.stringify(m));
     if (picker.open) renderDropdown();
   }
-  function hexaForData(d) { if (!d) return null; var e = hexaMap()[hexaKey(d)]; return e ? e.v : null; }
+  // Seed the cache from a meta block (a downloaded file carries hexaConverted like the cloud
+  // document does), so an import shows its HEXA figure before Result is pressed here.
+  function seedHexa(d, meta) {
+    var hc = meta ? Number(meta.hexaConverted) : NaN;
+    if (!d || !isFinite(hc) || hc <= 0) return;
+    var h = hexaKey(d), m = hexaMap();
+    if (m[h] && m[h].v > 0) return;
+    m[h] = { v: Math.round(hc), at: nowIso() };
+    var ks = Object.keys(m);
+    if (ks.length > 80) { ks.sort(function (a, b) { return m[a].at < m[b].at ? -1 : 1; }); while (ks.length > 80) delete m[ks.shift()]; }
+    lsSet(LS_CLOUD_HEXA, JSON.stringify(m));
+  }
+  function hexaForData(d) { if (!d) return null; var e = hexaMap()[hexaKey(d)]; return e && e.v > 0 ? e.v : null; }
+  function hexaErrForData(d) { if (!d) return 0; var e = hexaMap()[hexaKey(d)]; return (e && e.err) || 0; }
+  // true when the cached figure is the plain converted stat (no HEXA analysis), not a HEXA one.
+  function hexaPlainForData(d) { if (!d) return false; var e = hexaMap()[hexaKey(d)]; return !!(e && e.v > 0 && e.plain); }
+  function hexaErrText(code) {
+    return code === -1 ? 'calculation limit hit' : code === -2 ? 'ignore defense error' : code === -3 ? 'HEXA combat analysis missing' :
+      code === -4 ? 'input error' : code === -5 ? 'impossible setup, check Main Stat %' : code === -6 ? 'crit rate below 100%' : code === -7 ? 'force too low' : 'error ' + code;
+  }
   function fmtNum(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
   function fmtK(n) { n = Math.round(n); return n >= 10000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n); }
   function slotMeta(sd) {
     var st = (sd && sd.stat) || {}; var lv = Number(st.level);
-    return { classKo: st.myClass || '', classEn: classEn(st.myClass || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: hexaForData(sd) };
+    return { classKo: st.myClass || '', classEn: classEn(st.myClass || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: hexaForData(sd), hexaPlain: hexaPlainForData(sd), hexaErr: hexaErrForData(sd), warn: statWarnings(sd) };
   }
   function docMeta(doc) {
     var m = doc && doc.meta; var p = doc && doc.preset && doc.preset.data;
     var r;
     if (p && p.stat) r = slotMeta(p);
-    else { var lv = m ? Number(m.level) : 0; r = { classKo: (m && m.class) || '', classEn: classEn((m && m.class) || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: null }; }
+    else { var lv = m ? Number(m.level) : 0; r = { classKo: (m && m.class) || '', classEn: classEn((m && m.class) || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexa: null, hexaPlain: false, hexaErr: 0, warn: [] }; }
     var hc = m ? Number(m.hexaConverted) : NaN;
     if (r.hexa == null && isFinite(hc) && hc > 0) r.hexa = Math.round(hc);
     return r;
   }
-  function metaLine(m) { if (!m.classKo && !m.level) return 'empty preset'; return (m.classEn || '?') + ' Lv ' + m.level + ', ' + (m.hexa ? fmtK(m.hexa) + ' HEXA' : 'HEXA n/a'); }
+  function metaLine(m) { if (!m.classKo && !m.level) return 'No class or level yet'; return (m.classEn || '?') + ' Lv ' + m.level + ', ' + (m.hexa ? fmtK(m.hexa) + (m.hexaPlain ? ' stat (no HEXA analysis)' : ' HEXA') : m.hexaErr ? 'HEXA: ' + hexaErrText(m.hexaErr) : 'HEXA: press Result') + (m.warn && m.warn.length ? ', check inputs' : ''); }
   function relTime(iso) {
     if (!iso) return 'never';
     var t = new Date(iso).getTime(); if (isNaN(t)) return '';
@@ -1520,7 +1666,7 @@
   function slotName(key, slot) {
     var b = cloud.bindings[key];
     if (b && b.ign) return b.ign + (slot && slot.label && !eqi(slot.label, b.ign) ? ' (' + slot.label + ')' : '');
-    return (slot && slot.label) || (slot && presetDataOk(slot.data) ? autoPresetLabel(slot.data) : '') || ('Preset ' + key);
+    return (slot && slot.label) || (slot && presetDataOk(slot.data) ? autoPresetLabel(slot.data) : '') || ('Character ' + key);
   }
   function svgIcon(name, extra) {
     var P = {
@@ -1565,12 +1711,15 @@
       if (opts.body) init.body = JSON.stringify(opts.body);
       if (ctrl) init.signal = ctrl.signal;
       var done = function (res, json) {
+        clearTimeout(timer); // cleared here, not at headers time, so the abort timer also covers a stalled body read
         setOffline(false);
         var etag = (res.headers.get('ETag') || '').replace(/^W\//, '').replace(/"/g, '');
-        resolve({ status: res.status, ok: res.ok, json: json, etag: etag });
+        var retryAfter = parseInt(res.headers.get('Retry-After') || '', 10);
+        resolve({ status: res.status, ok: res.ok, json: json, etag: etag, retryAfter: retryAfter > 0 ? retryAfter : 0 });
       };
       fetch(cloudUrl() + path, init).then(function (res) {
-        clearTimeout(timer);
+        // A gateway error (502/503/504, Cloudflare 52x/53x) means the backend is down: treat it like a network failure.
+        if (res.status === 502 || res.status === 503 || res.status === 504 || res.status >= 520) { clearTimeout(timer); setOffline(true); reject({ offline: true, status: res.status }); return; }
         if (method === 'HEAD' || res.status === 204) { done(res, null); return; }
         res.text().then(function (t) { var j = null; try { j = t ? JSON.parse(t) : null; } catch (e) {} done(res, j); }, function () { done(res, null); });
       }, function (err) { clearTimeout(timer); setOffline(true); reject({ offline: true, error: err }); });
@@ -1579,33 +1728,14 @@
   function busy(delta) { cloud.busy = Math.max(0, cloud.busy + delta); updateIcon(); }
   function cloudPath(ign) { return '/v1/characters/' + encodeURIComponent(String(ign)); } // the server lowercases the key
 
-  // The public list is everyone's characters; it is only fetched when the dropdown opens
-  // (never per keystroke) and is shown in full only once you have typed two characters.
-  function refreshCloudList(force, cb) {
-    if (!cloudEnabled()) { cloud.list = null; if (cb) cb(); return; }
-    if (!force && cloud.list && Date.now() - cloud.listAt < LIST_CACHE_MS) { if (cb) cb(); return; }
-    if (cloud.listBusy) { if (cb) cb(); return; }
-    cloud.listBusy = true; renderDropdown();
-    cloudFetch('GET', '/v1/characters').then(function (r) {
-      cloud.listBusy = false;
-      if (r.ok && r.json && Array.isArray(r.json.characters)) {
-        cloud.list = r.json.characters.filter(function (c) { return c && IGN_RE.test(c.ign || ''); });
-        cloud.listAt = Date.now(); cloud.listErr = false;
-        for (var k in cloud.bindings) {
-          var b = cloud.bindings[k]; if (!b || !b.ign) continue;
-          for (var i = 0; i < cloud.list.length; i++) if (eqi(cloud.list[i].ign, b.ign)) { b.remoteUpdatedAt = cloud.list[i].updatedAt || b.remoteUpdatedAt; break; }
-        }
-        saveBindings();
-      } else cloud.listErr = true;
-      renderDropdown(); updateIcon(); if (cb) cb();
-    }, function () { cloud.listBusy = false; cloud.listErr = true; renderDropdown(); updateIcon(); if (cb) cb(); });
-  }
   function checkRemote(key, cb) {
     var b = cloud.bindings[key];
     if (!b || !b.ign || !cloudEnabled()) { if (cb) cb(null); return; }
     cloudFetch('HEAD', cloudPath(b.ign)).then(function (r) {
       if (r.status === 404) { b.remoteUpdatedAt = null; b.cloudUpdatedAt = null; }
-      else if (r.ok && r.etag) b.remoteUpdatedAt = r.etag;
+      // The server never issues an older updatedAt for the same key, so an ETag behind our last
+      // upload is a HEAD that landed after our own PUT: keep the newer stamp or the icon says "cloud is newer".
+      else if (r.ok && r.etag && (!b.cloudUpdatedAt || r.etag >= b.cloudUpdatedAt)) b.remoteUpdatedAt = r.etag;
       saveBindings(); updateIcon(); if (cb) cb(r);
     }, function () { updateIcon(); if (cb) cb(null); });
   }
@@ -1614,18 +1744,26 @@
     cloudFetch('GET', cloudPath(ign)).then(function (r) {
       busy(-1);
       if (r.status === 404) { cb(null, null); return; }
-      if (!r.ok || !r.json) { cb({ status: r.status, json: r.json }, null); return; }
+      if (!r.ok || !r.json) { cb({ status: r.status, json: r.json, retryAfter: r.retryAfter }, null); return; }
       cb(null, r.json);
     }, function (e) { busy(-1); cb(e, null); });
   }
-  function docPresetData(doc) {
+  // Plain English for a failed read or delete. A 429 gets the same wording as a rate limited upload.
+  function httpErrText(r, what) {
+    if (r && r.offline) return 'Cloud unavailable';
+    if (r && r.status === 429) return 'The cloud is rate limiting requests. Try again in ' + (r.retryAfter ? r.retryAfter + ' seconds.' : 'a minute.');
+    return what;
+  }
+  // `report` (optional) collects the fields conformTo had to reset. Only the explicit "load
+  // the cloud copy" path (applyCloudDoc) shows it: compare and preview callers stay quiet.
+  function docPresetData(doc, report) {
     var d = doc && doc.preset && doc.preset.data;
     if (!d || !d.stat) return null;
     var tmpl = currentUserStatTemplate() || siteRefs.defaultUserStat;
-    return tmpl ? conformTo(tmpl, d) : d;
+    return tmpl ? conformTo(tmpl, d, report) : d;
   }
 
-  /* -- polling: HEAD the selected character every 30 s (backing off) and on focus -------- */
+  /* -- polling: HEAD the selected character every 5 min (backing off to 15) and on focus, at most once a minute -- */
   function stopPolling() { if (cloud.pollTimer) { clearTimeout(cloud.pollTimer); cloud.pollTimer = null; } }
   function startPolling() { if (cloud.pollTimer) return; cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay); }
   function pollTick(immediate) {
@@ -1635,7 +1773,8 @@
     if (!isInputRoute() || !cloudEnabled() || !key || !cloud.bindings[key] || !cloud.bindings[key].ign) { cloud.pollDelay = POLL_MS; return; }
     if (document.hidden && !immediate) { cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay); return; }
     checkRemote(key, function (r) {
-      cloud.pollDelay = r ? POLL_MS : Math.min(POLL_MAX_MS, cloud.pollDelay * 2);
+      var ok = !!r && (r.ok || r.status === 404);   // any other status (5xx, 429) backs off like a failed request
+      cloud.pollDelay = ok ? POLL_MS : Math.min(POLL_MAX_MS, cloud.pollDelay * 2);
       cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay);
     });
   }
@@ -1649,7 +1788,9 @@
     if (!cloudEnabled()) return { state: 'off', key: key, b: b };
     var d = currentDraft(), h = d ? hashData(d) : null;
     var localChanged = !b.syncedHash || (!!h && h !== b.syncedHash);
-    if (!b.cloudUpdatedAt) return { state: 'not-uploaded', key: key, b: b };
+    // A binding that was never uploaded can still know about a cloud copy (a HEAD 200 from the poll
+    // or a 404 that cleared cloudUpdatedAt). Route it to the compare dialog, never to a blind upload.
+    if (!b.cloudUpdatedAt) return b.remoteUpdatedAt ? { state: 'cloud-ahead', key: key, b: b } : { state: 'not-uploaded', key: key, b: b };
     if (cloud.offline) return { state: 'offline', key: key, b: b };
     var cloudChanged = !!(b.remoteUpdatedAt && b.remoteUpdatedAt !== b.cloudUpdatedAt);
     if (!localChanged && !cloudChanged) return { state: 'synced', key: key, b: b };
@@ -1659,7 +1800,7 @@
   }
   var ICON_STATES = {
     'none':         { icon: 'cloud',          color: 'text-text-gray-low', title: 'No character selected. Your inputs are not being saved. Pick one from the list.' },
-    'unlinked':     { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Saved locally, not linked to an IGN. Click to link and upload.' },
+    'unlinked':     { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Saved in this browser only. Click to link it to an IGN.' },
     'off':          { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Cloud sync is off.' },
     'not-uploaded': { icon: 'cloud-upload',   color: 'text-text-gray-low', title: 'Not in the cloud yet. Click to upload.' },
     'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable. Click to retry.' },
@@ -1677,6 +1818,9 @@
     function text() { return btn.getAttribute('data-msfix-tip') || btn.getAttribute('aria-label') || ''; }
     function place() {
       if (!tip) return;
+      // The button can leave the DOM while hovered or focused (panel remount, route change).
+      // Browsers fire no mouseleave/blur for that, so drop the tip instead of parking it at 8,8.
+      if (!btn.isConnected) { hide(); return; }
       var r = btn.getBoundingClientRect();
       tip.style.left = '0px'; tip.style.top = '0px';
       var w = tip.offsetWidth, h = tip.offsetHeight;
@@ -1735,8 +1879,11 @@
   function setSelected(key, load, quiet) {
     var map = presetMap(), slot = map[key];
     if (!slot) return false;
+    // A pending autosave still belongs to the old character: write it before the form changes.
+    if (cloud.saveTimer && cloud.selected && cloud.selected.key !== key) flushAutosave();
     var b = cloud.bindings[key];
     cloud.selected = { key: key, ign: b ? b.ign : null, label: slot.label || '', savedAt: slot.savedAt || null };
+    if (!slot.label && !slot.savedAt) cloud.selected.hash = hashData(slot.data);   // see slotMatchesSel
     saveBindings();
     if (load && !loadIntoForm(key)) return false;
     renderTrigger(); updateIcon();
@@ -1746,6 +1893,7 @@
   }
   function deselect(reason) {
     if (!cloud.selected) return;
+    if (cloud.saveTimer) flushAutosave();
     cloud.selected = null; saveBindings();
     renderTrigger(); updateIcon();
     if (reason) toastOk(reason);
@@ -1754,6 +1902,8 @@
   // result, Undo) find out which slot — if any — the form now shows.
   function resolveSelectionFromDraft(draft, strict) {
     if (!draft) return;
+    // The form already shows the new draft, so a pending autosave must not land in the old slot.
+    if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; }
     var h = hashData(draft), map = presetMap(), keys = slotKeys(map), cur = selectedKey();
     if (cur && map[cur] && hashData(map[cur].data) === h) return;
     for (var i = 0; i < keys.length; i++) {
@@ -1764,14 +1914,27 @@
   }
 
   /* -- auto-save: the draft goes into the selected slot 500 ms after the last change ------ */
+  // Stamp the binding and the selection for `key` with the label/savedAt about to be written,
+  // BEFORE the store write: the site notifies its subscribers synchronously, so the reconciler
+  // (label/savedAt matching) runs during setPresetMap and would drop an unlabelled slot whose
+  // only match is the savedAt we are replacing. Returns a function that restores the old values.
+  function stampSlotRefs(key, label, savedAt) {
+    var b = cloud.bindings[key], sel = cloud.selected && cloud.selected.key === key ? cloud.selected : null;
+    var bOld = b ? { label: b.label, savedAt: b.savedAt } : null, sOld = sel ? { label: sel.label, savedAt: sel.savedAt } : null;
+    if (b) { b.label = label; b.savedAt = savedAt; }
+    if (sel) { sel.label = label; sel.savedAt = savedAt; }
+    return function () {
+      if (b && bOld) { b.label = bOld.label; b.savedAt = bOld.savedAt; }
+      if (sel && sOld) { sel.label = sOld.label; sel.savedAt = sOld.savedAt; }
+    };
+  }
   function writeDraftToSlot(key, draft) {
     var map = clone(presetMap()), slot = map[key];
     if (!slot) return false;
     var now = nowIso();
     map[key] = { data: clone(draft), label: slot.label || '', savedAt: now };
-    if (!setPresetMap(map)) return false;
-    var b = cloud.bindings[key]; if (b) { b.savedAt = now; b.label = map[key].label; }
-    if (cloud.selected && cloud.selected.key === key) { cloud.selected.savedAt = now; cloud.selected.label = map[key].label; }
+    var undo = stampSlotRefs(key, map[key].label, now);
+    if (!setPresetMap(map)) { undo(); return false; }
     saveBindings();
     return true;
   }
@@ -1844,7 +2007,7 @@
   }
   function bindSlot(key, ign, doc) {
     var slot = presetMap()[key]; if (!slot) return;
-    var prev = cloud.bindings[key] || {};
+    var prev = cloud.bindings[key] || {}, oldHk = histKey(key);
     if (prev.ign && eqi(prev.ign, ign)) ign = prev.ign;   // keep the case the user typed
     cloud.bindings[key] = {
       ign: ign, label: slot.label || '', savedAt: slot.savedAt || null,
@@ -1855,6 +2018,7 @@
     };
     if (cloud.selected && cloud.selected.key === key) cloud.selected.ign = ign;
     saveBindings();
+    moveHistory(oldHk, histKey(key));   // the slot's saves follow it under its IGN
   }
 
   /* -- slot writes ----------------------------------------------------------------------- */
@@ -1869,20 +2033,24 @@
   }
   // Write `data` under `label` into `key` (or a fresh slot) and return the key.
   function writeSlot(key, data, label) {
-    var map = clone(presetMap());
+    var map = clone(presetMap()), now = nowIso(), undo = null, oldHk = key ? histKey(key) : null;
     if (!key) key = allocSlotKey(map);
-    map[key] = { data: clone(data), label: label || '', savedAt: nowIso() };
-    return setPresetMap(map) ? key : null;
+    else if (map[key]) undo = stampSlotRefs(key, label || '', now);
+    map[key] = { data: clone(data), label: label || '', savedAt: now };
+    if (setPresetMap(map)) { moveHistory(oldHk, histKey(key)); return key; }
+    if (undo) undo();
+    return null;
   }
   // Pull the cloud document into a slot (writing it, re-binding, and reloading the form if
   // that slot is the selected one).
   function applyCloudDoc(key, doc) {
-    var dataIn = docPresetData(doc);
-    if (!dataIn || !presetDataOk(dataIn)) { toastErr('The cloud copy of ' + doc.ign + ' is not a valid preset'); return null; }
+    var report = [], dataIn = docPresetData(doc, report);
+    if (!dataIn || !presetDataOk(dataIn)) { toastErr('The cloud copy of ' + doc.ign + ' is not a valid character file'); return null; }
     var cur = presetMap()[key];
     if (cur && presetDataOk(cur.data)) pushHistory(key, 'keep', cur.data);
     key = writeSlot(key, dataIn, (cur && cur.label) || doc.ign);
     if (!key) return null;
+    conformToast(report, 'the cloud copy');
     bindSlot(key, doc.ign || cloud.bindings[key].ign, doc);
     pushHistory(key, 'pull', dataIn);
     if (selectedKey() === key) { loadIntoForm(key); renderTrigger(); updateIcon(); }
@@ -1894,11 +2062,28 @@
     var slot = presetMap()[key], b = cloud.bindings[key];
     if (!slot || !b || !b.ign) { if (cb) cb(false); return; }
     if (!presetDataOk(slot.data)) { toastErr('Enter a class and level before uploading'); if (cb) cb(false); return; }
+    var warns = statWarnings(slot.data);
+    if (warns.length && !opts.warned) {
+      if (opts.quiet) {
+        // never pop a modal mid-edit: one toast per character, the icon stays out of sync
+        if (cloud.warnToastKey !== key) { cloud.warnToastKey = key; toastErr('Not uploaded. ' + warns[0] + ' Click the sync icon to upload anyway.'); }
+        if (cb) cb(false); return;
+      }
+      confirmDialog('Check the inputs for ' + b.ign, warns.join(' '), 'Upload anyway', function () {
+        var o = {}; for (var k in opts) o[k] = opts[k]; o.warned = true;
+        uploadSlot(key, o, cb);
+      });
+      return;
+    }
+    if (!warns.length) cloud.warnToastKey = null;
     var m = slotMeta(slot.data);
+    // The server derives class, level and hexaStat from preset.data and caps labels at 64 chars.
+    // Only hexaConverted is sent as meta, so a stray value cannot turn a valid preset into a 400.
+    var lbl = String(slot.label || b.ign).slice(0, 64);
     var body = {
-      preset: { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: slot.label || b.ign, data: slot.data },
-      label: slot.label || b.ign,
-      meta: { 'class': m.classKo, level: m.level, hexaStat: (slot.data.hexa && Number(slot.data.hexa.hexaStat)) || 0, hexaConverted: m.hexa || null }
+      preset: { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: lbl, data: slot.data },
+      label: lbl,
+      meta: { hexaConverted: m.hexa && !m.hexaPlain ? m.hexa : null }
     };
     var headers = {};
     if (b.cloudUpdatedAt && opts.ifMatch !== false) headers['If-Match'] = '"' + b.cloudUpdatedAt + '"';
@@ -1909,7 +2094,7 @@
         var up = (r.json && r.json.updatedAt) || r.etag || nowIso();
         b.cloudUpdatedAt = up; b.remoteUpdatedAt = up; b.syncedHash = hashData(slot.data); b.syncedAt = nowIso();
         pushHistory(key, 'upload', slot.data);
-        cloud.conflictToastKey = null; cloud.listAt = 0; saveBindings(); updateIcon();
+        cloud.conflictToastKey = null; saveBindings(); updateIcon();
         if (!opts.quiet) toastOk('Uploaded to the cloud');
         if (cb) cb(true);
       } else if (r.status === 409) {
@@ -1919,8 +2104,8 @@
         if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud. Click the sync icon to compare.');
         if (cb) cb(false);
       } else {
-        toastErr(r.status === 429 ? 'The cloud is rate limiting uploads. Try again in a minute.'
-          : 'Cloud upload failed (' + r.status + (r.json && r.json.error ? ' ' + r.json.error : '') + ')');
+        toastErr(r.status === 429 ? 'The cloud is rate limiting uploads. Try again in ' + (r.retryAfter ? r.retryAfter + ' seconds.' : 'a minute.')
+          : 'Cloud upload failed (' + r.status + (r.json && (r.json.detail || r.json.error) ? ' ' + (r.json.detail || r.json.error) : '') + ')');
         if (cb) cb(false);
       }
     }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable. Upload skipped.'); updateIcon(); if (cb) cb(false); });
@@ -1948,6 +2133,15 @@
     var s = typeof v === 'string' ? v : JSON.stringify(v);
     return s.length > 22 ? s.slice(0, 21) + '...' : s;
   }
+  // Readable name for a diff row: 'stat.myClass' becomes 'Class', 'hexa.skillCore1' becomes 'Skill Core 1'.
+  var DIFF_LABELS = { myClass: 'Class', level: 'Level', hexaStat: 'HEXA Stat', mainStatBase: 'Main stat', mainStatPer: 'Main stat %', mainStatAbs: 'Main stat (flat)', subStatBase: 'Sub stat', subStatPer: 'Sub stat %', subStatAbs: 'Sub stat (flat)', atkBase: 'Attack', atkPercent: 'Attack %', dmg: 'Damage %', bossDmg: 'Boss damage %', normalDmg: 'Normal damage %', ignoreDef: 'IED %', critical: 'Crit rate %', criticalDmg: 'Crit damage %', buffDuration: 'Buff duration %', coolTimeReducePercent: 'Cooldown reduction %', coolTimeReduce: 'Cooldown reduction (s)', arcaneForce: 'Arcane Force', authenticForce: 'Sacred Force' };
+  function diffLabel(path) {
+    var leaf = String(path || '').replace(/^(?:stat|hexa)\./, '');
+    if (DIFF_LABELS[leaf]) return DIFF_LABELS[leaf];
+    var core = /^(skill|mastery|rein|general)Core(\d+)$/.exec(leaf);
+    if (core) return { skill: 'Skill Core ', mastery: 'Mastery Core ', rein: 'Enhancement Core ', general: 'Common Core ' }[core[1]] + core[2];
+    return leaf;
+  }
   function infoCard(body, heading, lines) {
     var card = el('div', 'outline outline-outline-gray-med rounded-lg px-3 py-2 flex flex-col gap-0.5 text-left');
     card.appendChild(el('span', 'text-sm font-semibold truncate', heading));
@@ -1965,20 +2159,24 @@
       subtitle: o.subtitle || '',
       build: function (body, close) {
         infoCard(body, 'Your inputs', [metaLine(lm),
-          'Edited ' + relTime(o.localSavedAt) + ', uploaded ' + relTime(o.localSyncedAt)]);
+          'Edited ' + relTime(o.localSavedAt) + (o.localSyncedAt ? ', uploaded ' + relTime(o.localSyncedAt) : ', never uploaded')]);
         infoCard(body, 'Cloud copy', [metaLine(cm),
           'Updated ' + relTime(o.doc.updatedAt) + (o.doc.updatedAt ? ' (' + shortDate(o.doc.updatedAt) + ')' : '')]);
         if (diffs.length) {
           var box = el('div', 'flex flex-col gap-0.5 text-left');
-          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + ' field' + (diffs.length === 1 ? '' : 's') + ' differ' + (diffs.length === 1 ? 's' : '') + ' (yours to cloud)'));
-          diffs.slice(0, 8).forEach(function (d) { box.appendChild(el('span', 'text-text-gray-low text-xs truncate', d.path + ': ' + fmtVal(d.a) + ' to ' + fmtVal(d.b))); });
+          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + (diffs.length === 1 ? ' field is different' : ' fields are different')));
+          diffs.slice(0, 8).forEach(function (d) {
+            var row = el('span', 'text-text-gray-low text-xs truncate', diffLabel(d.path) + ': yours ' + fmtVal(d.a) + ', cloud ' + fmtVal(d.b));
+            row.title = d.path + ': yours ' + fmtVal(d.a) + ', cloud ' + fmtVal(d.b);
+            box.appendChild(row);
+          });
           if (diffs.length > 8) box.appendChild(el('span', 'text-text-gray-low text-xs', 'and ' + (diffs.length - 8) + ' more'));
           body.appendChild(box);
         } else if (cloudData) body.appendChild(el('span', CLS.hint, 'Same inputs on both sides.'));
         var list = el('div', CLS.list);
         list.appendChild(msRow('Upload my inputs', 'Replaces the cloud copy', function () { close(); o.onOverwriteCloud(); }));
         list.appendChild(msRow('Use cloud copy', 'Loads it into the form', function () { close(); o.onReplaceLocal(); }));
-        if (o.onSaveAsNew) list.appendChild(msRow('Keep both', 'Saves the cloud copy as a new preset', function () { close(); o.onSaveAsNew(); }));
+        if (o.onSaveAsNew) list.appendChild(msRow('Keep both', 'Saves the cloud copy as a new character', function () { close(); o.onSaveAsNew(); }));
         body.appendChild(list);
         var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button';
         cancel.addEventListener('click', function () { close(); });
@@ -1991,20 +2189,27 @@
     closePicker();
     var info = syncInfo(), key = info.key, b = info.b, map = presetMap();
     switch (info.state) {
-      case 'none': openPicker(); return;
-      case 'off': openPicker(); toastOk('Cloud sync is off.'); return;
+      case 'none': picker.input.focus(); openPicker(); return;
+      case 'off': picker.input.focus(); openPicker(); toastOk('Cloud sync is off.'); return;
       case 'unlinked': openAddDialog(map[key] && IGN_RE.test(map[key].label || '') ? map[key].label : '', { linkKey: key }); return;
       case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
       case 'synced': checkRemote(key, function (r) { if (r && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
       case 'not-uploaded':
-        confirmDialog('Upload to the cloud?', '', 'Upload', function () { uploadSlot(key, { ifMatch: false }); });
+        // Look first: the IGN may have been created elsewhere since the last check.
+        fetchDoc(b.ign, function (err, doc) {
+          if (err) { toastErr(httpErrText(err, 'Could not read ' + b.ign + ' from the cloud')); return; }
+          if (doc) { b.remoteUpdatedAt = doc.updatedAt; saveBindings(); updateIcon(); openCompareForSlot(key); return; }
+          confirmDialog('Upload to the cloud?', '', 'Upload', function () { uploadSlot(key, { ifMatch: false }); });
+        });
         return;
       case 'local-ahead':
-        msDialog({ title: 'Upload changes to the cloud?', subtitle: '', build: function (body, close) {
+        msDialog({ title: 'Upload changes to the cloud?', subtitle: 'Discard replaces your inputs with the cloud copy. The current inputs stay in History.', build: function (body, close) {
           var row = el('div', 'flex w-full gap-2');
           var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); return x; };
           mk('Cancel', CLS.ghost, null);
-          mk('Discard', CLS.ghost + ' text-red-500', function () { discardToCloud(key); });
+          var discardBtn = mk('Discard my changes', CLS.ghost + ' text-red-500', function () { discardToCloud(key); });
+          discardBtn.title = 'Replace my inputs with the cloud copy';
+          discardBtn.setAttribute('aria-label', 'Replace my inputs with the cloud copy');
           mk('Upload', CLS.primary, function () { uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); });
           body.appendChild(row);
         } });
@@ -2017,7 +2222,7 @@
     var b = cloud.bindings[key]; if (!b || !b.ign) return;
     flushAutosave();
     fetchDoc(b.ign, function (err, doc) {
-      if (err) { toastErr(err.offline ? 'Cloud unavailable' : 'Could not read ' + b.ign + ' from the cloud'); return; }
+      if (err) { toastErr(httpErrText(err, 'Could not read ' + b.ign + ' from the cloud')); return; }
       if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud. Nothing to restore.'); return; }
       if (applyCloudDoc(key, doc)) toastOk('Restored from the cloud');
     });
@@ -2027,9 +2232,18 @@
     if (!b || !slot) return;
     flushAutosave();
     fetchDoc(b.ign, function (err, doc) {
-      if (err) { toastErr(err.offline ? 'Cloud unavailable' : 'Could not read ' + b.ign + ' from the cloud'); return; }
+      if (err) { toastErr(httpErrText(err, 'Could not read ' + b.ign + ' from the cloud')); return; }
       if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud. Click the icon to upload it again.'); return; }
       slot = presetMap()[key];
+      // Timestamps alone flag the cloud as newer, but a repeat upload of the same inputs (a second
+      // device, the same file again) changes nothing. Adopt the cloud stamp and stay synced.
+      var cd = docPresetData(doc);
+      if (cd && hashData(cd) === hashData(slot.data)) {
+        b.cloudUpdatedAt = doc.updatedAt; b.remoteUpdatedAt = doc.updatedAt; b.syncedHash = hashData(slot.data); b.syncedAt = b.syncedAt || nowIso();
+        cloud.conflictToastKey = null; saveBindings(); updateIcon();
+        toastOk(b.ign + ' matches the cloud copy. Nothing to do.');
+        return;
+      }
       compareDialog({
         ign: b.ign, doc: doc, localData: slot.data, localLabel: slotName(key, slot), localSavedAt: slot.savedAt, localSyncedAt: b.syncedAt,
         title: b.ign + ' differs from the cloud',
@@ -2037,8 +2251,12 @@
         onReplaceLocal: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
         onSaveAsNew: function () {
           var d = docPresetData(doc); if (!d) return;
-          var nk = writeSlot(null, d, doc.ign + ' (cloud)');
-          if (nk) { toastOk('Saved the cloud copy as Preset ' + nk); }
+          var nk = writeSlot(null, d, doc.ign + ' (cloud)'); if (!nk) return;
+          // The cloud copy now lives in its own slot, so this slot has seen that version. Drop the
+          // "cloud is newer" flag and mark the local inputs as not uploaded yet (local-ahead).
+          b.cloudUpdatedAt = doc.updatedAt; b.remoteUpdatedAt = doc.updatedAt; b.syncedHash = null;
+          cloud.conflictToastKey = null; saveBindings(); updateIcon();
+          toastOk('Saved the cloud copy as Character ' + nk + '. Your inputs stay here, not uploaded.');
         }
       });
     });
@@ -2056,7 +2274,7 @@
     if (!presetDataOk(localData)) { toastErr('Enter a class and level first'); return; }
     msDialog({
       title: linkKey ? 'Link ' + slotName(linkKey, map[linkKey]) + ' to an IGN' : 'Add character',
-      subtitle: linkKey ? 'Renames this preset to the IGN.' : 'Starts a new character from the current inputs. Upload it later from the sync icon.',
+      subtitle: linkKey ? 'The character is renamed to the IGN.' : 'Starts a new character from the current inputs. Upload it later from the sync icon.',
       build: function (body, close) {
         var input = el('input', CLS.input); input.setAttribute('maxlength', '16'); input.placeholder = 'IGN'; input.value = prefill || '';
         input.setAttribute('autocapitalize', 'off'); input.setAttribute('spellcheck', 'false');
@@ -2082,13 +2300,19 @@
     var b = cloud.bindings[key];
     msDialog({ title: ign + ' already exists', subtitle: metaLine(slotMeta(slot.data)) + ', saved ' + relTime(slot.savedAt), build: function (body, close) {
       var list = el('div', CLS.list);
-      list.appendChild(msRow('Overwrite with these inputs', b && b.cloudUpdatedAt ? 'The cloud copy is uploaded too' : 'Replaces the saved preset', function () {
+      list.appendChild(msRow('Overwrite with these inputs', b && b.cloudUpdatedAt ? 'The cloud copy is uploaded too' : 'Replaces the saved character', function () {
         close();
+        // Save pending edits into the character that is selected now, before the selection moves.
+        flushAutosave();
         if (!writeDraftToSlot(key, localData)) return;
-        setSelected(key, false, true);
-        if (b && b.ign) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); else toastOk('Overwritten');
+        // localData may be another preset (row menu Set IGN), so load it unless the form already shows it.
+        var d0 = currentDraft();
+        if (!setSelected(key, !d0 || hashData(d0) !== hashData(localData), true)) return;
+        // Only a character that is already in the cloud uploads here. A linked but never-uploaded one stays local, as the row says.
+        if (b && b.ign && b.cloudUpdatedAt) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
+        else { toastOk('Overwritten' + (b && b.ign ? '. Click the sync icon to upload.' : '')); updateIcon(); }
       }));
-      list.appendChild(msRow('Switch to it', 'Loads the saved preset into the form', function () { close(); setSelected(key, true); }));
+      list.appendChild(msRow('Switch to it', 'Loads the saved character into the form', function () { close(); setSelected(key, true); }));
       body.appendChild(list);
       var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
     } });
@@ -2117,6 +2341,12 @@
         });
         return;
       }
+      // Same inputs already in the cloud: link to it, nothing to upload or load.
+      var cd = docPresetData(doc);
+      if (cd && hashData(cd) === hashData(localData)) {
+        if (bindLocal(doc)) toastOk('Linked ' + ign + '. The cloud copy has the same inputs.');
+        return;
+      }
       compareDialog({
         ign: ign, doc: doc, localData: localData, localLabel: linkKey ? slotName(linkKey, presetMap()[linkKey]) : 'current inputs',
         localSavedAt: linkKey && presetMap()[linkKey] ? presetMap()[linkKey].savedAt : nowIso(), localSyncedAt: null,
@@ -2125,7 +2355,7 @@
         onSaveAsNew: linkKey ? null : function () {
           var d = docPresetData(doc); if (!d) return;
           var nk = writeSlot(null, d, ign); if (!nk) return;
-          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved the cloud copy of ' + ign + ' as a new preset');
+          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved the cloud copy of ' + ign + ' as a new character');
         }
       });
     });
@@ -2135,9 +2365,9 @@
     var existing = bindingByIgn(ign);
     if (existing) { setSelected(existing.key, true); return; }
     fetchDoc(ign, function (err, doc) {
-      if (err || !doc) { toastErr(err && err.offline ? 'Cloud unavailable' : 'Could not load ' + ign + ' from the cloud'); cloud.listAt = 0; return; }
+      if (err || !doc) { toastErr(err && err.offline ? 'Cloud unavailable' : 'Could not load ' + ign + ' from the cloud'); return; }
       var d = docPresetData(doc);
-      if (!d || !presetDataOk(d)) { toastErr('The cloud copy of ' + ign + ' is not a valid preset'); return; }
+      if (!d || !presetDataOk(d)) { toastErr('The cloud copy of ' + ign + ' is not a valid character file'); return; }
       var key = writeSlot(null, d, doc.ign || ign); if (!key) return;
       bindSlot(key, doc.ign || ign, doc);
       setSelected(key, true, true);
@@ -2150,11 +2380,14 @@
   var WHY = { upload: 'Uploaded', edit: 'Saved', pull: 'Cloud copy', keep: 'Before a change', restore: 'Restored', import: 'Imported' };
   var histCache = null;
   function histMap() { if (!histCache) histCache = lsJson(LS_CLOUD_HISTORY, {}); return histCache; }
-  function histKey(key) { var b = cloud.bindings[key]; if (b && b.ign) return b.ign.toLowerCase(); var s = presetMap()[key]; return 'slot:' + ((s && s.label) || key); }
+  // Keyed by IGN, else by label. Slot numbers shift when a preset is deleted, so a preset with
+  // neither has no stable key and keeps no history (null).
+  function histKey(key) { var b = cloud.bindings[key]; if (b && b.ign) return b.ign.toLowerCase(); var s = presetMap()[key]; return s && s.label ? 'slot:' + s.label : null; }
   function saveHist() {
     var m = histMap();
     for (var tries = 0; tries < 8; tries++) {
-      try { lsSet(LS_CLOUD_HISTORY, JSON.stringify(m)); return; }
+      // localStorage directly, not lsSet: lsSet swallows the quota error this loop retries on
+      try { localStorage.setItem(LS_CLOUD_HISTORY, JSON.stringify(m)); return; }
       catch (e) {   // storage quota: drop the oldest snapshot anywhere and retry
         var ok = null, oi = -1, oat = null;
         for (var k in m) for (var i = 0; i < m[k].length; i++) if (!oat || m[k][i].at < oat) { oat = m[k][i].at; ok = k; oi = i; }
@@ -2167,7 +2400,8 @@
   // of save gets its own entry. Identical content never creates a duplicate.
   function pushHistory(key, why, data) {
     if (!data || !presetDataOk(data)) return;
-    var hk = histKey(key), m = histMap(), list = m[hk] || (m[hk] = []), h = hashData(data);
+    var hk = histKey(key); if (!hk) return;
+    var m = histMap(), list = m[hk] || (m[hk] = []), h = hashData(data);
     if (list.length && list[0].hash === h) { if (why !== 'edit') list[0].why = why; list[0].at = nowIso(); saveHist(); return; }
     if (why === 'edit' && list.length && list[0].why === 'edit' && Date.now() - new Date(list[0].at).getTime() < HISTORY_EDIT_GAP_MS) {
       list[0] = { at: nowIso(), why: 'edit', hash: h, data: clone(data) }; saveHist(); return;
@@ -2176,13 +2410,19 @@
     while (list.length > HISTORY_MAX) list.pop();
     saveHist();
   }
-  function historyFor(key) { return histMap()[histKey(key)] || []; }
-  function moveHistory(fromKey, toKey) { if (fromKey === toKey) return; var m = histMap(); if (m[fromKey]) { m[toKey] = m[fromKey]; delete m[fromKey]; saveHist(); } }
+  function historyFor(key) { var hk = histKey(key); return (hk && histMap()[hk]) || []; }
+  // Re-key a character's saves (label change, linking to an IGN). Merges when both keys have saves.
+  function moveHistory(fromKey, toKey) {
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    var m = histMap(); if (!m[fromKey]) return;
+    m[toKey] = m[fromKey].concat(m[toKey] || []).sort(function (a, b) { return a.at < b.at ? 1 : (a.at > b.at ? -1 : 0); }).slice(0, HISTORY_MAX);
+    delete m[fromKey]; saveHist();
+  }
   function openHistory(key) {
     closePicker();
     var slot = presetMap()[key]; if (!slot) return;
     var list = historyFor(key), cur = hashData(slot.data);
-    msDialog({ title: 'History', subtitle: list.length ? 'Pick a save to load it into the form. Nothing is uploaded.' : 'No saves yet.', build: function (body, close) {
+    msDialog({ title: 'History', subtitle: list.length ? 'Pick a save to load it into the form. Nothing is uploaded.' : (histKey(key) ? 'No saves yet.' : 'Set an IGN for this character to keep its saves.'), build: function (body, close) {
       var box = el('div', CLS.list);
       list.forEach(function (h, i) {
         var same = h.hash === cur;
@@ -2215,7 +2455,9 @@
       if (!writeDraftToSlot(key, d)) return;
       pushHistory(key, 'edit', d);
       setSelected(key, false, true);
-      if (b && b.ign) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); else toastOk('Overwritten');
+      // Only a character that is already in the cloud uploads here. A linked but never-uploaded one stays local, as the dialog says.
+      if (b && b.ign && b.cloudUpdatedAt) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
+      else { toastOk('Overwritten' + (b && b.ign ? '. Click the sync icon to upload.' : '')); updateIcon(); }
     });
   }
   function renameSlot(key) {
@@ -2238,6 +2480,9 @@
         if (b) b.label = ign; if (wasSelected) cloud.selected.label = ign; saveBindings();
         var m2 = clone(presetMap()); if (!m2[key]) return; m2[key].label = ign; if (!setPresetMap(m2)) return;
         bindSlot(key, ign, null);
+        // bindSlot keeps the old spelling of a case-only rename (so the cloud state survives);
+        // the binding still has to carry the spelling the user just typed.
+        if (cloud.bindings[key]) { cloud.bindings[key].ign = ign; saveBindings(); }
         moveHistory(oldHist, histKey(key));
         if (wasSelected) setSelected(key, false, true);
         renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
@@ -2253,12 +2498,21 @@
     var name = slotName(key, slot), b = cloud.bindings[key];
     (function () {
       var s = cloudStores(); if (!s) return;
+      // The store's subscriber runs reconcileBindings synchronously inside deletePreset, so the
+      // selection, history and binding must go first. Snapshot them and put them back on failure.
+      var savedSel = cloud.selected, hm = histMap(), hk = histKey(key), savedHist = hk ? hm[hk] : null;
       if (cloud.selected && cloud.selected.key === key) { if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; } cloud.selected = null; }
-      var hm = histMap(); delete hm[histKey(key)]; saveHist();
+      if (hk && hm[hk]) { delete hm[hk]; saveHist(); }
       delete cloud.bindings[key]; saveBindings();
-      try { s.ps.getState().deletePreset(key); } catch (e) { toastErr('Could not delete the preset'); return; }
+      try { s.ps.getState().deletePreset(key); } catch (e) {
+        if (hk && savedHist) { hm[hk] = savedHist; saveHist(); }
+        if (b) cloud.bindings[key] = b;
+        cloud.selected = savedSel; saveBindings();
+        renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+        toastErr('Could not delete the character'); return;
+      }
       reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
-      toastOk('Deleted the local preset');
+      toastOk('Deleted from this browser');
     })();
   }
   function deleteCloud(key) {
@@ -2270,7 +2524,7 @@
         if (r.ok || r.status === 404) {
           b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; b.syncedHash = null; b.syncedAt = null; saveBindings(); updateIcon(); if (picker.open) renderDropdown();
           toastOk('Deleted from the cloud');
-        } else toastErr('Could not delete ' + b.ign + ' from the cloud (' + r.status + ')');
+        } else toastErr(httpErrText(r, 'Could not delete ' + b.ign + ' from the cloud (' + r.status + ')'));
       }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable'); updateIcon(); });
     })();
   }
@@ -2278,7 +2532,7 @@
   function deleteDialog(key) {
     var slot = presetMap()[key]; if (!slot) return;
     var b = cloud.bindings[key], inCloud = !!(b && b.ign && b.cloudUpdatedAt);
-    msDialog({ title: 'Delete this character?', subtitle: inCloud ? 'The local preset and the cloud copy are deleted separately.' : '', build: function (body, close) {
+    msDialog({ title: 'Delete this character?', subtitle: inCloud ? 'The copy in this browser and the cloud copy are deleted separately.' : '', build: function (body, close) {
       var row = el('div', 'flex w-full flex-wrap gap-2');
       var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); };
       mk('Cancel', CLS.ghost, null);
@@ -2293,6 +2547,9 @@
     var b = cloud.bindings[key], ign = b && b.ign ? b.ign : null, name = ign || slot.label || autoPresetLabel(slot.data) || ('preset-' + key);
     var file = { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: slot.label || name, data: slot.data };
     if (ign) file.ign = ign;
+    // Carry the HEXA figure like the cloud document does, so another browser can show it on import.
+    var m = slotMeta(slot.data);
+    if (m.hexa && !m.hexaPlain) file.meta = { hexaConverted: m.hexa };
     var blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = 'scouter-character-' + String(name).replace(/[\/\\:*?"<>|\s]+/g, '_') + '.json';
@@ -2328,17 +2585,22 @@
     pickJsonFile(function (txt) {
       var parsed = parsePresetFile(txt);
       var usable = parsed ? parsed.presets.filter(function (p) { return presetDataOk(p.data); }) : [];
-      if (!usable.length) { toastErr("This isn't a MapleScouter preset file"); return; }
+      if (!usable.length) { toastErr('This is not a MapleScouter character file'); return; }
       pickPreset(usable, function (p) {
-        var data = conformTo(currentUserStatTemplate(), p.data);
-        var ign = p.ign || (IGN_RE.test(p.label || '') ? p.label : null);
+        var report = [], data = conformTo(currentUserStatTemplate(), p.data, report);
+        conformToast(report, 'this file');
+        var warns = statWarnings(data); if (warns.length) toastErr('Check the inputs in this file. ' + warns[0]);
+        seedHexa(data, p.meta);
+        // Only our own exports carry `ign`. A label that merely looks like an IGN is never bound
+        // here: that would silently point the slot at someone else's public cloud key.
+        var ign = p.ign || null;
         var existing = ign ? bindingByIgn(ign) : null;
-        var finish = function (key, what) { if (ign) bindSlot(key, ign, null); setSelected(key, true, true); toastOk(what + ' ' + (ign || p.label || 'preset')); };
+        var finish = function (key, what) { if (ign) bindSlot(key, ign, null); setSelected(key, true, true); toastOk(what + ' ' + (ign || p.label || 'character')); };
         if (!existing) { var k = writeSlot(null, data, ign || p.label || autoPresetLabel(data)); if (k) finish(k, 'Imported'); return; }
         msDialog({ title: ign + ' already exists', subtitle: 'The file contains ' + metaLine(slotMeta(data)) + '.', build: function (body, close) {
           var list = el('div', CLS.list);
-          list.appendChild(msRow('Replace it', 'The file replaces the saved preset', function () { close(); var old = presetMap()[existing.key]; if (old) pushHistory(existing.key, 'keep', old.data); var k2 = writeSlot(existing.key, data, ign); if (k2) { pushHistory(k2, 'import', data); finish(k2, 'Replaced'); } }));
-          list.appendChild(msRow('Import as a new preset', 'Keeps both', function () { close(); var k3 = writeSlot(null, data, ign + ' (file)'); if (k3) { setSelected(k3, true, true); toastOk('Imported ' + ign + ' as a new preset'); } }));
+          list.appendChild(msRow('Replace it', 'The file replaces the saved character', function () { close(); var old = presetMap()[existing.key]; if (old) pushHistory(existing.key, 'keep', old.data); var k2 = writeSlot(existing.key, data, ign); if (k2) { pushHistory(k2, 'import', data); finish(k2, 'Replaced'); } }));
+          list.appendChild(msRow('Import as a new character', 'Keeps both', function () { close(); var k3 = writeSlot(null, data, ign + ' (file)'); if (k3) { setSelected(k3, true, true); toastOk('Imported ' + ign + ' as a new character'); } }));
           body.appendChild(list);
           var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
         } });
@@ -2348,9 +2610,9 @@
 
   /* -- the picker (combobox + sync icon) ------------------------------------------------- */
   var SOFT_BASE = CLS.soft.replace(' text-text-gray-high', '');
-  var picker = { el: null, input: null, dd: null, icon: null, live: null, open: false, filter: '', active: -1, items: [], mountPoll: null };
-  var C_INPUT = 'placeholder:text-muted-gray-low outline-outline-gray-med bg-surface-gray-surface-0 flex h-8 min-w-0 rounded-[4px] px-3 py-1 text-sm outline transition-[color,box-shadow] md:text-sm focus:outline-outline-gray-high focus:shadow-[0px_0px_0px_3px_rgba(0,0,0,0.20)] w-[216px] pr-8';
-  var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[340px] max-w-[92vw] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
+  var picker = { el: null, input: null, dd: null, icon: null, live: null, open: false, filter: '', active: -1, items: [], mountPoll: null, quietFocus: false };
+  var C_INPUT = 'outline-outline-gray-med bg-surface-gray-surface-0 flex h-8 min-w-0 rounded-[4px] px-3 py-1 text-sm outline transition-[color,box-shadow] md:text-sm focus:outline-outline-gray-high focus:shadow-[0px_0px_0px_3px_rgba(0,0,0,0.20)] w-[216px] pr-8';
+  var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[340px] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
   var C_SECTION = 'text-text-gray-low px-2 py-1 text-[11px] font-semibold tracking-wide';
   var C_OPT = 'msfix-opt relative flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none text-left';
   var C_OPT_HOVER = ' hover:bg-surface-gray-surface-1', C_OPT_SELECTED = ' bg-surface-gray-surface-1 hover:bg-surface-gray-surface-2', C_OPT_ACTIVE = 'bg-surface-gray-surface-2';
@@ -2374,7 +2636,7 @@
     var live = el('span', 'sr-only'); live.setAttribute('aria-live', 'polite');
     wrap.appendChild(rel); wrap.appendChild(icon); wrap.appendChild(live);
 
-    input.addEventListener('focus', function () { openPicker(); });
+    input.addEventListener('focus', function () { if (picker.quietFocus) return; openPicker(); });
     input.addEventListener('click', function () { if (!picker.open) openPicker(); });
     input.addEventListener('input', function () { picker.filter = input.value; picker.active = -1; if (!picker.open) openPicker(); else renderDropdown(); });
     input.addEventListener('keydown', onPickerKey);
@@ -2412,6 +2674,7 @@
     renderTrigger();
   }
   function onPickerKey(e) {
+    if (dlgStack.length) return;   // a dialog is on top: its keys are not ours
     var n = picker.items.length;
     if (e.key === 'Escape') { if (picker.open) { e.preventDefault(); e.stopPropagation(); closePicker(); picker.input.blur(); } return; }
     if (e.key === 'Tab') { closePicker(); return; }
@@ -2423,10 +2686,25 @@
     else if (e.key === 'End') { e.preventDefault(); setActive(n ? n - 1 : -1); }
     else if (e.key === 'Enter') {
       e.preventDefault();
-      if (picker.active >= 0) activateItem(picker.active);
-      else if (n === 1) activateItem(0);
-      else if (picker.filter.trim() && IGN_RE.test(picker.filter.trim())) openAddDialog(picker.filter.trim());
+      if (picker.active >= 0) { activateItem(picker.active); return; }
+      // No row is highlighted: pick the saved character the typed text names, if there is exactly one.
+      var q = picker.filter.trim(), hit = enterTarget(q);
+      if (hit >= 0) activateItem(hit);
+      else if (q && IGN_RE.test(q)) openAddDialog(q);
     }
+  }
+  // The saved rows the typed text points at: an exact IGN or name match wins, else the only listed row.
+  function enterTarget(q) {
+    var map = presetMap(), locals = [], exact = [];
+    for (var i = 0; i < picker.items.length; i++) {
+      var it = picker.items[i]; if (it.type !== 'local') continue;
+      locals.push(i);
+      var b = cloud.bindings[it.key], s = map[it.key];
+      if (q && ((b && b.ign && eqi(b.ign, q)) || (s && s.label && eqi(s.label, q)) || eqi(slotName(it.key, s), q))) exact.push(i);
+    }
+    if (exact.length === 1) return exact[0];
+    if (q && locals.length === 1) return locals[0];
+    return -1;
   }
   function setActive(i) {
     picker.active = i;
@@ -2462,8 +2740,8 @@
       kb.innerHTML = svgIcon('ellipsis'); top.appendChild(kb);
     }
     d.appendChild(top);
-    if (sub1) d.appendChild(el('span', 'text-text-gray-low w-full text-xs whitespace-normal break-words', sub1));
-    if (sub2) d.appendChild(el('span', 'text-text-gray-low w-full text-xs whitespace-normal break-words', sub2));
+    if (sub1) d.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub1));
+    if (sub2) d.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub2));
     return d;
   }
   function renderDropdown() {
@@ -2485,7 +2763,7 @@
       if (b && b.ign && ql && b.ign.toLowerCase() === ql) typedIsLocal = true;
       if (!match([name, s.label, b && b.ign, m.classEn, m.classKo])) return;
       var inCloud = !!(b && b.ign && b.cloudUpdatedAt);
-      var when = 'saved ' + relTime(s.savedAt) + (inCloud ? ', cloud ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt) : '');
+      var when = 'Saved ' + relTime(s.savedAt) + (inCloud ? ', cloud copy ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt) : '');
       dd.appendChild(addItem({ type: 'local', key: k }, optionEl(picker.items.length, name, metaLine(m), when, inCloud ? ['local', 'cloud'] : ['local'], k === sel, k)));
       rows++;
     });
@@ -2511,6 +2789,7 @@
 
   function unmountPicker() {
     closePicker(); stopPolling();
+    if (picker.icon && picker.icon.__msfixTip) picker.icon.__msfixTip.hide();
     if (picker.el && picker.el.parentNode) picker.el.parentNode.removeChild(picker.el);
   }
   // Idempotent: mounts once the native row exists and both stores are known; re-run after
@@ -2523,7 +2802,10 @@
     if (!ensureSubscriptions()) return false;
     if (picker.el && header.contains(picker.el)) return true;
     if (!picker.el) buildPicker();
-    else if (picker.el.parentNode) picker.el.parentNode.removeChild(picker.el);
+    else {
+      if (picker.icon && picker.icon.__msfixTip) picker.icon.__msfixTip.hide();
+      if (picker.el.parentNode) picker.el.parentNode.removeChild(picker.el);
+    }
     header.appendChild(picker.el);
     reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
     startPolling();
@@ -2579,13 +2861,14 @@
       if (document.hidden) { stopPolling(); return; }
       var now = Date.now();
       if (now - (cloud.lastFocusCheck || 0) < FOCUS_CHECK_GAP_MS) { startPolling(); return; }
-      cloud.lastFocusCheck = now; cloud.pollDelay = POLL_MS; pollTick(true);
+      cloud.lastFocusCheck = now; if (!cloud.offline) cloud.pollDelay = POLL_MS; pollTick(true);   // while offline, one probe now but keep the backed-off delay
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
+    if (DEBUG_REFS) siteRefs.pollNow = function () { pollTick(true); };   // test hook
     window.addEventListener('storage', function (e) {
       if (!e || (e.key !== LS_CLOUD_SLOTS && e.key !== LS_CLOUD_SELECTED && e.key !== LS_CLOUD_ENABLED && e.key !== LS_CLOUD_AUTO)) return;
-      loadBindings(); if (cloud.subscribed) reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+      loadBindings(); if (cloud.subscribed) reconcileBindings(true); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
     });
     document.addEventListener('mousedown', function (e) {
       if (picker.open && picker.el && !picker.el.contains(e.target)) closePicker();
@@ -2633,7 +2916,7 @@
     applyRouteGate();
     schedulePickerMount();
     if (document.body && pathLocale() === 'en') {
-      setTimeout(function () { processTree(document.body); }, 50);
+      setTimeout(function () { sweepTree(document.body); }, 50);
     }
   }
 

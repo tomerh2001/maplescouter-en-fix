@@ -1,8 +1,8 @@
-# Privacy Policy, MapleScouter English Fix
+# Privacy Policy, MapleScouter Enhancements
 
 _Last updated: 2026-09-03_
 
-MapleScouter English Fix does **not collect, sell, or track any user data.** The only data that can leave your browser is a MapleStory character preset you choose to upload to the cloud sync service described below.
+MapleScouter Enhancements does **not collect, sell, or track any user data.** The only data that can leave your browser is a MapleStory character preset you choose to upload to the cloud sync service described below.
 
 ## What the extension does
 - It runs only on `maplescouter.com`.

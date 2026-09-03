@@ -21,7 +21,7 @@ const PROMO = (w, h, big) => `<!doctype html><html><body style="margin:0;width:$
   background:linear-gradient(135deg,#1a1a1f 0%,#2b1a12 60%,#4a2313 100%);font-family:Helvetica,Arial">
   <img src="file://${path.join(__dirname, '..', 'extension', 'icons', 'icon128.png')}" width="${big ? 160 : 96}" height="${big ? 160 : 96}" style="border-radius:${big ? 32 : 20}px">
   <div>
-    <div style="color:#fff;font-size:${big ? 56 : 28}px;font-weight:700;letter-spacing:-0.5px">MapleScouter<br>English Fix</div>
+    <div style="color:#fff;font-size:${big ? 56 : 28}px;font-weight:700;letter-spacing:-0.5px">MapleScouter<br>Enhancements</div>
     <div style="color:#ffb08a;font-size:${big ? 26 : 14}px;margin-top:${big ? 14 : 8}px">Full GMS English &middot; No ads &middot; Remembers your server</div>
   </div>
 </body></html>`;

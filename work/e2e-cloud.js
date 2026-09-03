@@ -159,6 +159,51 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { trigger: trig.value, icon, dropdown: txt.slice(0, 200) };
   });
 
+  await scenario('D2. an unlabelled preset (label "", no savedAt) stays selected across several autosaves', async () => {
+    // The site itself can hold a slot with an empty label and no savedAt. Selecting it stores label "" + savedAt null;
+    // the first autosave used to replace the savedAt before the selection was stamped, and the reconciler dropped it.
+    await page.evaluate((base) => { var ps = window.__e2e.ps; var cur = ps.getState().preset || {}; var map = {}; for (var k in cur) map[k] = cur[k]; var d = JSON.parse(JSON.stringify(base)); d.stat.level = '245'; d.stat.myClass = '비숍'; var keys = Object.keys(map).map(Number); var nk = String(Math.max.apply(null, keys.concat([0])) + 1); map[nk] = { data: d, label: '' }; ps.getState().setPreset(map); }, base);
+    await wait(400);
+    await openPicker(); await clickOption('Lv 245 Bishop');
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '245'), 8000, 'unlabelled slot loaded');
+    const levels = [];
+    for (const lv of ['246', '247', '248']) {
+      await setDraft({ level: lv }); await wait(900);
+      const slots = await page.evaluate(H.slots); const key = Object.keys(slots).find(k => slots[k].label === '' && slots[k].cls === '비숍');
+      const trig = await page.evaluate(H.trigger); const b = await page.evaluate(H.bindings);
+      if (!key || slots[key].level !== lv) throw new Error('autosave ' + lv + ' did not land: ' + JSON.stringify(slots));
+      if (!b.selected || b.selected.key !== key || trig.selected !== key) throw new Error('selection dropped after saving ' + lv + ': ' + JSON.stringify({ selected: b.selected, trig }));
+      levels.push(slots[key].level);
+    }
+    // put things back: select Len again and drop the unlabelled slot
+    await openPicker(); await clickOption('Len');
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '250'), 8000, 'Len loaded again');
+    await page.evaluate(() => { var ps = window.__e2e.ps; var cur = ps.getState().preset || {}; var map = {}; for (var k in cur) if (!(cur[k].label === '' && cur[k].data && cur[k].data.stat && cur[k].data.stat.myClass === '비숍')) map[k] = cur[k]; ps.getState().setPreset(map); });
+    await wait(400);
+    const trig = await page.evaluate(H.trigger); if (trig.value !== 'Len') throw new Error('Len not selected after cleanup: ' + JSON.stringify(trig));
+    return { levels };
+  });
+
+  await scenario('D3. switching character right after an edit (before the 500 ms autosave) still saves the edit into the old slot', async () => {
+    await openPicker();
+    await setDraft({ level: '252' });   // arms the autosave timer for Len
+    await clickOption('HTomer');        // switch within 500 ms
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '276'), 8000, 'HTomer loaded');
+    await wait(900);
+    let slots = await page.evaluate(H.slots);
+    const len = Object.keys(slots).find(k => slots[k].label === 'Len');
+    if (!len || slots[len].level !== '252') throw new Error('Len lost the edit: ' + JSON.stringify(slots[len]));
+    const ht = Object.keys(slots).find(k => slots[k].label === 'HTomer');
+    if (!ht || slots[ht].level !== '276') throw new Error('HTomer changed: ' + JSON.stringify(slots[ht]));
+    // put Len back to 250 for the later scenarios
+    await openPicker(); await clickOption('Len');
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '252'), 8000, 'Len loaded again');
+    await setDraft({ level: '250' }); await wait(900);
+    slots = await page.evaluate(H.slots);
+    if (slots[len].level !== '250') throw new Error('Len not restored: ' + JSON.stringify(slots[len]));
+    return { lenAfterSwitch: '252', htomer: slots[ht].level };
+  });
+
   await scenario('E. typing an IGN offers "Load <IGN> from the cloud"; selecting it imports and loads it (no directory listing)', async () => {
     const put = await cloudReq('PUT', '/v1/characters/CloudGuy', makeDoc('CloudGuy', 260, '나이트로드', base));
     if (put.status !== 201 && put.status !== 200) throw new Error('seed PUT ' + put.status);
@@ -244,6 +289,67 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level };
   });
 
+  await scenario('H2. cloud re-uploaded with the same inputs: poll flags cloud-ahead, icon click marks synced with no compare dialog and no upload', async () => {
+    const cur = await cloudReq('GET', '/v1/characters/htomer');
+    if (cur.status !== 200) throw new Error('GET ' + cur.status);
+    await wait(5);   // the stub stamps updatedAt from the clock
+    const put = await cloudReq('PUT', '/v1/characters/HTomer', { preset: cur.json.preset, label: cur.json.label });
+    if (put.status !== 200) throw new Error('external PUT ' + put.status);
+    if (put.json.updatedAt === cur.json.updatedAt) throw new Error('updatedAt did not change');
+    await page.evaluate(() => window.__msfixDebug.pollNow());   // focus polls are throttled and H just used one
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced without a dialog');
+    await wait(300);
+    if (await page.evaluate(() => !!document.querySelector('.msfix-dialog'))) throw new Error('compare dialog opened for identical inputs: ' + (await dialogText()));
+    const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
+    if (putsAfter !== putsBefore) throw new Error('icon click uploaded identical inputs');
+    const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key;
+    if (!k || !b.slots[k] || b.slots[k].cloudUpdatedAt !== put.json.updatedAt) throw new Error('binding did not adopt the cloud stamp: ' + JSON.stringify(b.slots[k]));
+    return { cloudUpdatedAt: put.json.updatedAt };
+  });
+
+  await scenario('H3. compare from the sync icon, "Keep both": the cloud copy lands in a new slot, the icon drops to local-ahead (not cloud-ahead again), nothing is uploaded', async () => {
+    await wait(5);
+    const put = await cloudReq('PUT', '/v1/characters/HTomer', makeDoc('HTomer', 299, '은월', base));
+    if (put.status !== 200) throw new Error('external PUT ' + put.status);
+    await page.evaluate(() => window.__msfixDebug.pollNow());
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
+    const slotsBefore = await page.evaluate(H.slots);
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    await clickDialogButton('Keep both');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 8000, 'local-ahead after Keep both');
+    await wait(300);
+    if (await page.evaluate(() => !!document.querySelector('.msfix-dialog'))) throw new Error('a dialog is still open: ' + (await dialogText()));
+    const slots = await page.evaluate(H.slots);
+    const nk = Object.keys(slots).find(k => !slotsBefore[k] && slots[k].label === 'HTomer (cloud)');
+    if (!nk || slots[nk].level !== '299') throw new Error('cloud copy slot missing: ' + JSON.stringify(slots));
+    const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key;
+    if (!k || !b.slots[k] || b.slots[k].cloudUpdatedAt !== put.json.updatedAt || b.slots[k].remoteUpdatedAt !== put.json.updatedAt) throw new Error('binding did not acknowledge the cloud version: ' + JSON.stringify(b.slots[k]));
+    if (b.slots[nk]) throw new Error('the new slot must stay unbound: ' + JSON.stringify(b.slots[nk]));
+    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length !== putsBefore) throw new Error('Keep both uploaded');
+    // a second icon click must offer the upload dialog, not the compare dialog again
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload changes to the cloud\?/.test(d.innerText); }, 4000, 'upload dialog on second click');
+    await clickDialogButton('Upload');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after upload');
+    const doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (doc.json.preset.data.stat.level !== '276') throw new Error('cloud level after upload ' + doc.json.preset.data.stat.level);
+    // cleanup: drop the extra local slot so later scenarios see one HTomer row
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer \(cloud\)/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HTomer'; }, 8000, 'HTomer still selected after cleanup');
+    const after = await page.evaluate(H.slots);
+    if (Object.values(after).some(s => s.label === 'HTomer (cloud)')) throw new Error('extra slot still present ' + JSON.stringify(after));
+    return { newSlot: nk, cloudLevel: doc.json.preset.data.stat.level, icon: await page.evaluate(H.icon) };
+  });
+
   await scenario('I. auto-upload is off: an edit is saved locally but never uploaded until the icon is clicked', async () => {
     const h = await page.evaluateHandle(() => Array.from(document.querySelectorAll('input')).find(i => i.value === '276'));
     const elh = h.asElement(); if (!elh) throw new Error('no level input 276');
@@ -266,13 +372,42 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await elh.click({ clickCount: 3 }); await page.keyboard.type('278');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead');
     await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); if (!d || !/Upload changes to the cloud\?/.test(d.innerText)) return false; var names = Array.from(d.querySelectorAll('button')).map(b => b.textContent.trim()); return names.indexOf('Cancel') !== -1 && names.indexOf('Discard') !== -1 && names.indexOf('Upload') !== -1; }, 4000, 'Cancel/Discard/Upload dialog');
-    await clickDialogButton('Discard');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); if (!d || !/Upload changes to the cloud\?/.test(d.innerText)) return false; var names = Array.from(d.querySelectorAll('button')).map(b => b.textContent.trim()); return names.indexOf('Cancel') !== -1 && names.indexOf('Discard my changes') !== -1 && names.indexOf('Upload') !== -1 && /stay in History/.test(d.innerText); }, 4000, 'Cancel/Discard my changes/Upload dialog');
+    await clickDialogButton('Discard my changes');
     await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '277'), 8000, 'form restored to 277');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after discard');
     const slots = await page.evaluate(H.slots); const key = Object.keys(slots).find(k => slots[k].label === 'HTomer');
     if (slots[key].level !== '277') throw new Error('slot not restored: ' + JSON.stringify(slots[key]));
     return { level: slots[key].level };
+  });
+
+  await scenario('I3. an impossible Main Stat % (4831) flags the row with "check inputs" and the upload asks "Upload anyway"; fixing it uploads normally', async () => {
+    const puts0 = cloudRequests.filter(r => /^PUT/.test(r)).length;
+    await setDraft({ mainStatPer: '4831' });
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead');
+    await openPicker();
+    // the chip reads the saved slot, which the autosave writes 500 ms after the edit
+    await waitFor(() => /HTomer[^]*check inputs/.test((document.querySelector('.msfix-charpicker .msfix-dd').innerText || '').replace(/\s+/g, ' ')), 3000, 'row flagged with check inputs').catch(async () => { throw new Error('row not flagged: ' + (await dropdownText()).slice(0, 200)); });
+    const rowText = await dropdownText();
+    await page.keyboard.press('Escape'); await wait(200);
+    await page.click('.msfix-charpicker .msfix-sync');
+    await clickDialogButton('Upload');
+    await waitFor(() => { var d = document.querySelectorAll('.msfix-dialog'); var t = d.length ? d[d.length - 1].innerText : ''; return /Check the inputs for HTomer/.test(t) && /Main Stat % is 4831/.test(t); }, 4000, 'warning dialog');
+    const warnText = await dialogText();
+    await clickDialogButton('Cancel');
+    await wait(500);
+    if (cloudRequests.filter(r => /^PUT/.test(r)).length !== puts0) throw new Error('uploaded despite Cancel');
+    // a valid value that still differs from the cloud copy (restoring the exact synced value would leave nothing to upload)
+    const fixed = String((Number(base.stat.mainStatPer) || 800) + 1);
+    await setDraft({ mainStatPer: fixed });
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead after fix');
+    await wait(900);
+    await page.click('.msfix-charpicker .msfix-sync');
+    await clickDialogButton('Upload');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after fix');
+    const doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (doc.json.preset.data.stat.mainStatPer !== fixed) throw new Error('cloud mainStatPer ' + doc.json.preset.data.stat.mainStatPer);
+    return { warnText: warnText.slice(0, 120), cloudMainStatPer: doc.json.preset.data.stat.mainStatPer };
   });
 
   await scenario('J. picker: single "Characters" list, chips, highlighted selection, footer is only Import JSON…', async () => {
@@ -327,6 +462,66 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { hexa, fmt };
   });
 
+  await scenario('M2. a rejected setup (site answers boss300_hexaStat = -5) shows the reason on the row instead of "HEXA: press Result"; a good result replaces it', async () => {
+    // The site returns 201 with a negative code in every result field when it refuses the inputs.
+    // Replay the last real result with the -5 code so the cache path is exercised without editing the slot.
+    const shownErr = await page.evaluate(async () => {
+      var ms = window.__e2e.ms; if (typeof ms.setState !== 'function') throw new Error('store has no setState');
+      var r = ms.getState().result; window.__e2eGoodResult = r;
+      var cd = {}; for (var k in r.calculatedData) cd[k] = r.calculatedData[k]; cd.boss300_hexaStat = -5; cd.boss300_stat = -5; cd.mr_hexaStat = -5; cd.exchangePowerHexa = -5;
+      var bad = {}; for (var k2 in r) bad[k2] = r[k2]; bad.calculatedData = cd;
+      ms.setState({ result: bad });
+      return JSON.parse(localStorage.getItem('msfix:cloud:hexa') || '{}');
+    });
+    const errEntry = Object.values(shownErr).find(e => e.err === -5);
+    if (!errEntry || errEntry.v !== 0) throw new Error('no -5 entry cached: ' + JSON.stringify(shownErr).slice(0, 200));
+    await openPicker();
+    let ok = false; const t0 = Date.now();
+    while (Date.now() - t0 < 4000 && !ok) { ok = await page.evaluate(() => { var r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); return !!r && r.textContent.indexOf('HEXA: impossible setup, check Main Stat %') !== -1; }); if (!ok) await wait(150); }
+    if (!ok) throw new Error('error text on row :: ' + (await dropdownText()).slice(0, 200));
+    if (/HEXA: press Result/.test(await page.evaluate(() => Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)).textContent))) throw new Error('row still says HEXA: press Result');
+    // a later good result for the same inputs replaces the error
+    await page.evaluate(() => { var ms = window.__e2e.ms; var r = window.__e2eGoodResult; var cd = {}; for (var k in r.calculatedData) cd[k] = r.calculatedData[k]; var good = {}; for (var k2 in r) good[k2] = r[k2]; good.calculatedData = cd; ms.setState({ result: good }); });
+    ok = false; const t1 = Date.now();
+    while (Date.now() - t1 < 4000 && !ok) { ok = await page.evaluate(() => { var r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); return !!r && / HEXA/.test(r.textContent) && r.textContent.indexOf('HEXA:') === -1; }); if (!ok) await wait(150); }
+    if (!ok) throw new Error('good HEXA back on row :: ' + (await dropdownText()).slice(0, 200));
+    await page.keyboard.press('Escape');
+    return { errEntry };
+  });
+
+  await scenario('M3. no HEXA analysis on file (boss300_hexaStat = -3, boss300_stat normal): the row shows the plain stat, not "HEXA: press Result", and the upload sends hexaConverted null', async () => {
+    const stat = await page.evaluate(async () => {
+      var ms = window.__e2e.ms; var r = window.__e2eGoodResult || ms.getState().result;
+      var cd = {}; for (var k in r.calculatedData) cd[k] = r.calculatedData[k]; cd.boss300_hexaStat = -3; cd.mr_hexaStat = -3; cd.exchangePowerHexa = -3;
+      var doc = {}; for (var k2 in r) doc[k2] = r[k2]; doc.calculatedData = cd;
+      ms.setState({ result: doc });
+      return Math.round(Number(cd.boss300_stat));
+    });
+    if (!(stat > 0)) return { skipped: 'no positive boss300_stat in the last result' };
+    const entry = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('msfix:cloud:hexa') || '{}')).find(e => e.plain));
+    if (!entry || entry.v !== stat) throw new Error('no plain entry cached: ' + JSON.stringify(entry));
+    const fmt = (stat >= 10000 ? Math.round(stat / 1000) + 'k' : stat >= 1000 ? (stat / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(stat)) + ' stat (no HEXA analysis)';
+    await openPicker();
+    let ok = false; const t0 = Date.now();
+    while (Date.now() - t0 < 4000 && !ok) { ok = await page.evaluate((f) => { var r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); return !!r && r.textContent.indexOf(f) !== -1 && r.textContent.indexOf('HEXA: press Result') === -1; }, fmt); if (!ok) await wait(150); }
+    if (!ok) throw new Error('plain stat on row: ' + fmt + ' :: ' + (await dropdownText()).slice(0, 200));
+    await page.keyboard.press('Escape');
+    // the plain figure stays local: overwriting the cloud copy (same flow as H) must send hexaConverted null
+    const put = await cloudReq('PUT', '/v1/characters/HTomer', makeDoc('HTomer', 299, '은월', base));
+    if (put.status !== 200) throw new Error('external PUT ' + put.status);
+    await page.evaluate(() => window.__msfixDebug.pollNow());
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    await clickDialogButton('Upload my inputs');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced');
+    const doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (!doc.json.meta || doc.json.meta.hexaConverted !== null) throw new Error('cloud meta.hexaConverted: ' + JSON.stringify(doc.json.meta));
+    // restore the good result so later scenarios see a HEXA figure again
+    await page.evaluate(() => { var ms = window.__e2e.ms; var r = window.__e2eGoodResult; if (!r) return; var cd = {}; for (var k in r.calculatedData) cd[k] = r.calculatedData[k]; var good = {}; for (var k2 in r) good[k2] = r[k2]; good.calculatedData = cd; ms.setState({ result: good }); });
+    return { stat, fmt, cloudHexaConverted: doc.json.meta.hexaConverted };
+  });
+
   await scenario('R. History: the row menu lists the last saves; picking an older one loads it locally (icon local-ahead)', async () => {
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
@@ -365,6 +560,27 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { slot: slots[key], cloudLevel: doc.json.preset.data.stat.level };
   });
 
+  await scenario('O5. row menu: a case-only rename (HTomer → htomer) shows the new spelling and keeps the cloud state (icon synced); renaming back restores it', async () => {
+    const rename = async (from, to) => {
+      await openPicker();
+      await page.evaluate((from) => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => x.textContent.indexOf(from) !== -1); r.querySelector('[data-msfix-act=menu]').click(); }, from);
+      await clickDialogButton('Rename');
+      await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'rename dialog');
+      await page.evaluate((to) => { var i = document.querySelector('.msfix-dialog input'); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, to); i.dispatchEvent(new Event('input', { bubbles: true })); }, to);
+      await clickDialogButton('Rename');
+      await waitFor(`(function(){ var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ${JSON.stringify(to)}; })()`, 8000, 'renamed trigger ' + to);
+    };
+    await rename('HTomer', 'htomer');
+    let b = await page.evaluate(H.bindings); let k = b.selected && b.selected.key;
+    if (!k || !b.slots[k] || b.slots[k].ign !== 'htomer' || b.selected.ign !== 'htomer') throw new Error('binding kept the old case: ' + JSON.stringify(b));
+    if (!b.slots[k].cloudUpdatedAt || !b.slots[k].syncedHash) throw new Error('case-only rename dropped the cloud state: ' + JSON.stringify(b.slots[k]));
+    const icon1 = await page.evaluate(H.icon); if (icon1 !== 'synced') throw new Error('icon after case-only rename ' + icon1);
+    await rename('htomer', 'HTomer');
+    b = await page.evaluate(H.bindings); k = b.selected && b.selected.key;
+    if (!k || !b.slots[k] || b.slots[k].ign !== 'HTomer') throw new Error('rename back failed: ' + JSON.stringify(b));
+    const icon2 = await page.evaluate(H.icon); if (icon2 !== 'synced') throw new Error('icon after renaming back ' + icon2);
+    return { ign: b.slots[k].ign, icon: icon2 };
+  });
   await scenario('O. row menu: rename HTomer → HTomerX (icon not-uploaded), delete from cloud, delete local', async () => {
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
@@ -374,6 +590,16 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await clickDialogButton('Rename');
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HTomerX'; }, 8000, 'renamed trigger');
     const icon1 = await page.evaluate(H.icon); if (icon1 !== 'not-uploaded') throw new Error('icon after rename ' + icon1);
+    // Overwrite while not yet uploaded: the dialog does not mention the cloud, and nothing is uploaded (the icon stays not-uploaded).
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomerX/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Overwrite');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Overwrite this character\?/.test(d.innerText); }, 4000, 'confirm (not uploaded)');
+    const sub = await page.evaluate(() => document.querySelector('.msfix-dialog').innerText);
+    if (/cloud copy/.test(sub)) throw new Error('confirm mentions the cloud for a never-uploaded character: ' + sub);
+    await clickDialogButton('Overwrite'); await wait(1500);
+    const icon2 = await page.evaluate(H.icon); if (icon2 !== 'not-uploaded') throw new Error('icon after local overwrite ' + icon2);
+    if ((await cloudReq('GET', '/v1/characters/htomerx')).status !== 404) throw new Error('overwrite uploaded a never-uploaded character');
     await page.click('.msfix-charpicker .msfix-sync'); await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 10000, 'uploaded under new name');
     if ((await cloudReq('GET', '/v1/characters/htomerx')).status !== 200) throw new Error('HTomerX not in cloud');
@@ -395,6 +621,127 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { remaining: Object.values(slots).map(s => s.label), icon: await page.evaluate(H.icon) };
   });
 
+  await scenario('O4. Delete local when the site store throws: the binding, selection and history are put back and a toast says so', async () => {
+    await setDraft({ level: '250', myClass: '은월' });
+    await wait(700);
+    await openPicker();
+    await clickOption('+ Add character');
+    await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
+    await typeInDialog('HOrphan');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HOrphan\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await clickDialogButton('Add');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HOrphan'; }, 8000, 'HOrphan selected');
+    await setDraft({ level: '251' }); await wait(1500);   // one autosave = one history entry
+    const before = await page.evaluate(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'), sel = JSON.parse(localStorage.getItem('msfix:cloud:selected') || 'null'), h = JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}'); return { binding: JSON.stringify(Object.values(b).find(x => x && x.ign === 'HOrphan') || null), selected: sel && sel.label, history: JSON.stringify(h.horphan || null) }; });
+    if (before.binding === 'null' || before.selected !== 'HOrphan' || before.history === 'null') throw new Error('setup: ' + JSON.stringify(before));
+    // make the site's deletePreset throw once
+    await page.evaluate(() => { var ps = window.__e2e.ps; window.__e2eDel = ps.getState().deletePreset; ps.setState({ deletePreset: function () { throw new Error('e2e: store refused'); } }); });
+    try {
+      await openPicker();
+      await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HOrphan/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+      await clickDialogButton('Delete');
+      await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+      await clickDialogButton('Delete local');
+      await waitFor(() => /Could not delete the character/.test(document.body.innerText), 6000, 'failure toast');
+      await wait(300);
+    } finally {
+      await page.evaluate(() => { window.__e2e.ps.setState({ deletePreset: window.__e2eDel }); delete window.__e2eDel; });
+    }
+    const after = await page.evaluate(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'), sel = JSON.parse(localStorage.getItem('msfix:cloud:selected') || 'null'), h = JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}'); return { binding: JSON.stringify(Object.values(b).find(x => x && x.ign === 'HOrphan') || null), selected: sel && sel.label, history: JSON.stringify(h.horphan || null) }; });
+    const slots = await page.evaluate(H.slots);
+    if (!Object.values(slots).some(s => s.label === 'HOrphan')) throw new Error('slot gone although the store threw ' + JSON.stringify(slots));
+    if (after.binding !== before.binding || after.selected !== before.selected || after.history !== before.history) throw new Error('not restored: ' + JSON.stringify({ before, after }));
+    const trig = await page.evaluate(H.trigger); if (trig.value !== 'HOrphan') throw new Error('trigger after failed delete ' + JSON.stringify(trig));
+    // clean up: a normal delete now succeeds
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HOrphan/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog (cleanup)');
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after cleanup delete');
+    const slots2 = await page.evaluate(H.slots);
+    if (Object.values(slots2).some(s => s.label === 'HOrphan')) throw new Error('cleanup delete failed ' + JSON.stringify(slots2));
+    return { restored: after, remaining: Object.values(slots2).map(s => s.label) };
+  });
+
+  await scenario('O2. local-only IGN created elsewhere: poll flags cloud-ahead, icon click compares instead of overwriting', async () => {
+    await setDraft({ level: '250', myClass: '은월' });
+    await wait(700);
+    await openPicker();
+    await clickOption('+ Add character');
+    await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
+    await typeInDialog('HGhost');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HGhost\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await clickDialogButton('Add');
+    await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'icon not-uploaded');
+    // another browser uploads the same IGN
+    const put = await cloudReq('PUT', '/v1/characters/HGhost', makeDoc('HGhost', 299, '은월', base));
+    if (put.status !== 201 && put.status !== 200) throw new Error('external PUT ' + put.status);
+    await page.evaluate(() => window.__msfixDebug.pollNow());
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead after poll');
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /HGhost differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    const txt = await dialogText();
+    await clickDialogButton('Cancel');
+    await wait(300);
+    const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
+    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without the compare dialog');
+    const doc = await cloudReq('GET', '/v1/characters/hghost');
+    if (doc.status !== 200 || doc.json.preset.data.stat.level !== '299') throw new Error('cloud copy replaced: ' + doc.status + ' ' + JSON.stringify(doc.json && doc.json.preset && doc.json.preset.data.stat.level));
+    const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key;
+    if (!k || !b.slots[k] || b.slots[k].cloudUpdatedAt) throw new Error('binding should still be not-uploaded: ' + JSON.stringify(b.slots[k]));
+    // cleanup: drop the local slot and the external cloud copy so later scenarios start clean
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HGhost/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
+    const del = await cloudReq('DELETE', '/v1/characters/hghost', null, { 'X-Confirm': 'hghost' });
+    if (del.status !== 204) throw new Error('cleanup DELETE ' + del.status);
+    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level };
+  });
+
+  await scenario('O3. not-uploaded icon click looks first: an IGN created elsewhere (no poll yet) compares instead of overwriting', async () => {
+    await setDraft({ level: '250', myClass: '은월' });
+    await wait(700);
+    await openPicker();
+    await clickOption('+ Add character');
+    await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
+    await typeInDialog('HGhost');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HGhost\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await clickDialogButton('Add');
+    await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'icon not-uploaded');
+    // another browser uploads the same IGN; this tab has not polled, so the icon still says not-uploaded
+    const put = await cloudReq('PUT', '/v1/characters/HGhost', makeDoc('HGhost', 299, '은월', base));
+    if (put.status !== 201 && put.status !== 200) throw new Error('external PUT ' + put.status);
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /HGhost differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    const txt = await dialogText();
+    if (/Upload to the cloud\?/.test(txt)) throw new Error('blind upload confirm shown instead of the compare');
+    await clickDialogButton('Cancel');
+    await wait(300);
+    const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
+    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without the compare dialog');
+    const doc = await cloudReq('GET', '/v1/characters/hghost');
+    if (doc.status !== 200 || doc.json.preset.data.stat.level !== '299') throw new Error('cloud copy replaced: ' + doc.status + ' ' + JSON.stringify(doc.json && doc.json.preset && doc.json.preset.data.stat.level));
+    // cleanup: drop the local slot and the external cloud copy so later scenarios start clean
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HGhost/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
+    const del = await cloudReq('DELETE', '/v1/characters/hghost', null, { 'X-Confirm': 'hghost' });
+    if (del.status !== 204) throw new Error('cleanup DELETE ' + del.status);
+    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level };
+  });
+
   await scenario('P. Import JSON…: a native file with "ign" imports as a linked character; a file whose IGN exists offers Replace', async () => {
     const file1 = path.join(DL, 'imp1.json'); fs.writeFileSync(file1, JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: 'Imported', ign: 'Imported', data: makeDoc('Imported', 240, '아크', base).preset.data }));
     await openPicker();
@@ -414,6 +761,132 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { slots };
   });
 
+  await scenario('P2. Import JSON…: a file without "ign" whose label looks like an IGN ("Main") imports unbound (no cloud key)', async () => {
+    const file3 = path.join(DL, 'imp3.json'); fs.writeFileSync(file3, JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: 'Main', data: makeDoc('Main', 242, '아크', base).preset.data }));
+    await openPicker();
+    const [chooser3] = await Promise.all([page.waitForFileChooser({ timeout: 8000 }), clickOption('Import JSON...')]);
+    await chooser3.accept([file3]);
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Main'; }, 10000, 'imported + selected');
+    const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key; if (!k) throw new Error('no selection ' + JSON.stringify(b));
+    if (b.slots[k] && b.slots[k].ign) throw new Error('label bound as IGN: ' + JSON.stringify(b.slots[k]));
+    const r = await fetch(CLOUD + '/v1/characters/main').catch(() => null); if (r && r.status === 200) throw new Error('"main" reached the cloud');
+    return { key: k, binding: b.slots[k] || null };
+  });
+
+  await scenario('P3. Set IGN on the unbound "Main" preset moves its history from "slot:Main" to "main" (History still lists the edit)', async () => {
+    await setDraft({ level: '243' });
+    await waitFor(() => { var h = JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}'); return !!(h['slot:Main'] && h['slot:Main'].length); }, 4000, 'edit history under slot:Main');
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /Main/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Set IGN');
+    await waitFor(() => { var i = document.querySelector('.msfix-dialog input'); return !!i && i.value === 'Main'; }, 4000, 'add dialog prefilled with Main');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add Main\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await clickDialogButton('Add');
+    await waitFor(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'); return Object.keys(b).some(k => b[k].ign === 'Main'); }, 6000, 'Main bound');
+    const hist = await page.evaluate(() => JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}'));
+    if (hist['slot:Main']) throw new Error('history left under slot:Main');
+    if (!hist.main || !hist.main.length) throw new Error('no history under main: ' + JSON.stringify(Object.keys(hist)));
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /Main/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('History');
+    await waitFor(() => { var d = document.querySelectorAll('.msfix-dialog'); var last = d[d.length - 1]; return last && /History/.test(last.innerText) && last.querySelectorAll('button').length >= 2; }, 4000, 'history dialog lists the edit');
+    const text = await dialogText(); if (/No saves yet/.test(text)) throw new Error('History shows "No saves yet" after linking');
+    await clickDialogButton('Cancel');
+    return { historyKeys: Object.keys(hist), entries: hist.main.length, dialog: text.slice(0, 120) };
+  });
+
+  await scenario('P4. Import JSON…: a number stored as text and a short array are read as they are; one unreadable field is reset and a toast says so', async () => {
+    const d = makeDoc('Mixed', 244, '아크', base).preset.data;
+    if (!(d.hexa && typeof d.hexa.hexaStat === 'number' && d.doping && Array.isArray(d.doping.nobless) && typeof d.hexa.skillCore1 === 'string')) return { skipped: 'fixture shape changed' };
+    // Missing or unreadable fields are filled from the site's default userStat, not from another slot.
+    const dflt = await page.evaluate(() => { var d = window.__msfixDebug && window.__msfixDebug.defaultUserStat; return d ? { skillCore1: d.hexa.skillCore1, noblessLast: d.doping.nobless[d.doping.nobless.length - 1] } : null; });
+    const want = { hexaStat: d.hexa.hexaStat, noblessLen: d.doping.nobless.length, noblessLast: dflt ? dflt.noblessLast : d.doping.nobless[d.doping.nobless.length - 1], skillCore1: dflt ? dflt.skillCore1 : base.hexa.skillCore1 };
+    d.hexa.hexaStat = String(d.hexa.hexaStat);          // number stored as text: kept, read as a number
+    d.doping.nobless = d.doping.nobless.slice(0, -1);    // one entry short: kept, the last one filled in
+    d.hexa.skillCore1 = { bad: true };                   // unreadable: reset, reported
+    const file4 = path.join(DL, 'imp4.json'); fs.writeFileSync(file4, JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: 'Mixed', ign: 'Mixed', data: d }));
+    await openPicker();
+    const [chooser4] = await Promise.all([page.waitForFileChooser({ timeout: 8000 }), clickOption('Import JSON...')]);
+    await chooser4.accept([file4]);
+    await waitFor(() => /1 field in this file could not be read and was reset/.test(document.body.innerText), 8000, 'reset toast');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Mixed'; }, 10000, 'imported + selected');
+    const got = await page.evaluate(() => { var m = window.__e2e.ps.getState().preset; var s = Object.values(m).find(x => x.label === 'Mixed'); return s && { hexaStat: s.data.hexa.hexaStat, noblessLen: s.data.doping.nobless.length, noblessLast: s.data.doping.nobless[s.data.doping.nobless.length - 1], skillCore1: s.data.hexa.skillCore1 }; });
+    if (!got) throw new Error('Mixed slot missing');
+    if (got.hexaStat !== want.hexaStat) throw new Error('hexaStat not read as a number: ' + JSON.stringify(got));
+    if (got.noblessLen !== want.noblessLen || got.noblessLast !== want.noblessLast) throw new Error('nobless not padded: ' + JSON.stringify(got));
+    if (got.skillCore1 !== want.skillCore1) throw new Error('skillCore1 not reset: ' + JSON.stringify(got));
+    return got;
+  });
+
+  await scenario('P5. Import JSON…: a file carrying meta.hexaConverted shows its HEXA figure on the row before Result is pressed; Download JSON writes the same block', async () => {
+    const d = makeDoc('HexaFile', 245, '아크', base).preset.data;
+    const file5 = path.join(DL, 'imp5.json'); fs.writeFileSync(file5, JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: 'HexaFile', ign: 'HexaFile', data: d, meta: { hexaConverted: 123456 } }));
+    await openPicker();
+    const [chooser5] = await Promise.all([page.waitForFileChooser({ timeout: 8000 }), clickOption('Import JSON...')]);
+    await chooser5.accept([file5]);
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HexaFile'; }, 10000, 'imported + selected');
+    const cached = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('msfix:cloud:hexa') || '{}')).some(e => e.v === 123456));
+    if (!cached) throw new Error('msfix:cloud:hexa not seeded from meta.hexaConverted');
+    await openPicker();
+    const row = await page.evaluate(() => { var r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HexaFile/.test(x.textContent)); return r ? r.textContent.replace(/\s+/g, ' ') : null; });
+    if (!row || row.indexOf('123k HEXA') === -1) throw new Error('row lacks 123k HEXA: ' + row);
+    // the round trip: Download JSON on the selected character carries the figure back out
+    for (const f of fs.readdirSync(DL)) if (/^scouter-character-HexaFile/.test(f)) fs.unlinkSync(path.join(DL, f));
+    await clickOption('Download JSON...');
+    let files = []; const t0 = Date.now();
+    while (Date.now() - t0 < 8000) { files = fs.readdirSync(DL).filter(f => /^scouter-character-HexaFile/.test(f) && !/crdownload$/.test(f)); if (files.length) break; await wait(200); }
+    if (!files.length) throw new Error('no download after 8s');
+    const o = JSON.parse(fs.readFileSync(path.join(DL, files[0]), 'utf8'));
+    if (!o.meta || o.meta.hexaConverted !== 123456) throw new Error('downloaded file meta: ' + JSON.stringify(o.meta));
+    return { row, meta: o.meta };
+  });
+
+  await scenario('S. stub validates like the real server: a 70-char label is a 400, an oversized body a 413, the latest IGN case wins; the client shows the 400 toast', async () => {
+    // contract checks straight against :8080 (validate.ts: label <= 64, data sections, meta ranges, 256 KB body limit)
+    const long = new Array(71).join('x');
+    const bad = [
+      ['label', Object.assign(makeDoc('StubGuy', 250, '은월', base), { label: long })],
+      ['preset.label', (() => { const d = makeDoc('StubGuy', 250, '은월', base); d.preset.label = long; return d; })()],
+      ['meta.level', Object.assign(makeDoc('StubGuy', 250, '은월', base), { meta: { level: 301 } })],
+      ['meta.hexaConverted', Object.assign(makeDoc('StubGuy', 250, '은월', base), { meta: { hexaConverted: -1 } })],
+      ['data.hexa', (() => { const d = makeDoc('StubGuy', 250, '은월', base); delete d.preset.data.hexa; return d; })()],
+    ];
+    for (const [what, doc] of bad) { const r = await cloudReq('PUT', '/v1/characters/StubGuy', doc); if (r.status !== 400 || !r.json || r.json.error !== 'invalid_body') throw new Error(what + ': expected 400 invalid_body, got ' + r.status + ' ' + JSON.stringify(r.json)); }
+    const big = makeDoc('StubGuy', 250, '은월', base); big.preset.data.stat.note = new Array(300 * 1024).join('y');
+    const r413 = await cloudReq('PUT', '/v1/characters/StubGuy', big); if (r413.status !== 413) throw new Error('expected 413, got ' + r413.status);
+    const ok1 = await cloudReq('PUT', '/v1/characters/StubGuy', makeDoc('StubGuy', 250, '은월', base)); if (ok1.status !== 201) throw new Error('valid PUT ' + ok1.status);
+    const ok2 = await cloudReq('PUT', '/v1/characters/STUBGUY', makeDoc('STUBGUY', 251, '은월', base)); if (ok2.status !== 200) throw new Error('second PUT ' + ok2.status);
+    const got = await cloudReq('GET', '/v1/characters/stubguy'); if (!got.json || got.json.ign !== 'STUBGUY') throw new Error('latest writer case not kept: ' + JSON.stringify(got.json && got.json.ign));
+    await cloudReq('DELETE', '/v1/characters/stubguy', null, { 'X-Confirm': 'stubguy' });
+    // client side: a linked import whose label is 70 characters, then the sync icon; the site must surface the 400
+    const file4 = path.join(DL, 'imp4.json'); fs.writeFileSync(file4, JSON.stringify({ type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: long, ign: 'LongLabel', data: makeDoc('LongLabel', 244, '아크', base).preset.data }));
+    await openPicker();
+    const [chooser4] = await Promise.all([page.waitForFileChooser({ timeout: 8000 }), clickOption('Import JSON...')]);
+    await chooser4.accept([file4]);
+    await waitFor(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'); var s = JSON.parse(localStorage.getItem('msfix:cloud:selected') || 'null'); return !!(s && b[s.key] && b[s.key].ign === 'LongLabel'); }, 10000, 'LongLabel imported + selected');
+    await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') !== 'synced', 8000, 'icon not synced');
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/longlabel$/i.test(r)).length;
+    await page.click('.msfix-charpicker .msfix-sync');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload/.test(d.innerText); }, 8000, 'upload confirm');
+    await clickDialogButton('Upload');
+    const outcome = await waitFor(() => { if (/Cloud upload failed \(400/.test(document.body.innerText)) return 'toast'; var i = document.querySelector('.msfix-sync'); return i && i.getAttribute('data-msfix-sync') === 'synced' ? 'synced' : null; }, 10000, '400 toast or synced');
+    const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/longlabel$/i.test(r)).length;
+    if (putsAfter === putsBefore) throw new Error('no PUT was sent');
+    const doc = await cloudReq('GET', '/v1/characters/longlabel');
+    if (outcome === 'toast' && doc.status !== 404) throw new Error('400 toast shown but the cloud has the character: ' + doc.status);
+    if (outcome === 'synced' && (doc.status !== 200 || String(doc.json.label).length > 64)) throw new Error('synced but cloud label is ' + JSON.stringify(doc.json && doc.json.label));
+    // cleanup so later scenarios start clean
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /LongLabel|xxxxxxxx/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
+    if (doc.status === 200) await cloudReq('DELETE', '/v1/characters/longlabel', null, { 'X-Confirm': 'longlabel' });
+    return { outcome, rejected: bad.map(b => b[0]), cloud: doc.status };
+  });
+
   await scenario('Q. sync icon shows a styled tooltip on hover; unknown IGN lookup fails softly', async () => {
     await page.hover('.msfix-charpicker .msfix-sync'); await wait(300);
     const tip = await page.evaluate(() => { const t = document.querySelector('.msfix-tip'); return t ? { text: t.textContent, w: t.getBoundingClientRect().width, role: t.getAttribute('role') } : null; });
@@ -425,6 +898,47 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => /Could not load NoSuchGuy/.test(document.body.innerText), 6000, 'soft failure toast');
     const errs = pageErrors.filter(e => !/418/.test(e)); if (errs.length) throw new Error('page errors: ' + errs.join(' | '));
     return { tooltip: tip.text.slice(0, 80) };
+  });
+
+  await scenario('Q2. Enter after typing a saved name selects that character instead of opening Add character', async () => {
+    await page.keyboard.press('Escape'); await wait(200);
+    await openPicker(); await page.type('.msfix-charpicker input[role=combobox]', 'Len');
+    await page.keyboard.press('Enter');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Len' && !document.querySelector('.msfix-dialog'); }, 8000, 'Len selected by Enter');
+    if (await page.evaluate(() => !!document.querySelector('.msfix-dialog'))) throw new Error('Add dialog opened for a saved name');
+    // a partial name that lists exactly one saved character also selects it
+    await openPicker(); await page.type('.msfix-charpicker input[role=combobox]', 'Mai');
+    await page.keyboard.press('Enter');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Main' && !document.querySelector('.msfix-dialog'); }, 8000, 'Main selected by Enter on a partial name');
+    return { trigger: (await page.evaluate(H.trigger)).value };
+  });
+
+  await scenario('Q3. keyboard: ArrowRight opens the row menu with focus inside it; keys there never reach the picker; Tab wraps; Escape hands focus back to the input without reopening', async () => {
+    await page.keyboard.press('Escape'); await wait(200);
+    await openPicker();
+    await page.keyboard.press('ArrowDown'); await wait(100);
+    await page.keyboard.press('ArrowRight');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Overwrite/.test(d.innerText) && d.contains(document.activeElement); }, 4000, 'row menu with focus inside it');
+    const ddHidden = () => page.evaluate(() => document.querySelector('.msfix-charpicker .msfix-dd').hidden);
+    await page.keyboard.press('ArrowDown'); await wait(150); await page.keyboard.type('x'); await wait(150);
+    if (!(await ddHidden())) throw new Error('dropdown reopened under the dialog');
+    const first = await page.evaluate(() => document.activeElement.textContent.trim());
+    if (first !== 'Overwrite') throw new Error('first control not focused: ' + first);
+    const lastText = await page.evaluate(() => { var bs = document.querySelector('.msfix-dialog').querySelectorAll('button'); return bs[bs.length - 1].textContent.trim(); });
+    await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift'); await wait(100);
+    const wrapped = await page.evaluate(() => ({ inDialog: document.querySelector('.msfix-dialog').contains(document.activeElement), text: document.activeElement.textContent.trim() }));
+    if (!wrapped.inDialog || wrapped.text !== lastText) throw new Error('Shift+Tab did not wrap to the last control: ' + JSON.stringify(wrapped));
+    await page.keyboard.press('Tab'); await wait(100);
+    const back = await page.evaluate(() => document.activeElement.textContent.trim());
+    if (back !== 'Overwrite') throw new Error('Tab did not wrap back to the first control: ' + back);
+    await page.keyboard.press('Escape');
+    await waitFor(() => !document.querySelector('.msfix-dialog'), 4000, 'dialog closed'); await wait(150);
+    const after = await page.evaluate(() => ({ focusOnInput: document.activeElement === document.querySelector('.msfix-charpicker input[role=combobox]'), ddHidden: document.querySelector('.msfix-charpicker .msfix-dd').hidden }));
+    if (!after.focusOnInput || !after.ddHidden) throw new Error('focus not handed back quietly: ' + JSON.stringify(after));
+    await page.keyboard.press('ArrowDown');
+    await waitFor(() => !document.querySelector('.msfix-charpicker .msfix-dd').hidden, 3000, 'ArrowDown reopens the dropdown');
+    await page.keyboard.press('Escape'); await wait(200);
+    return after;
   });
 
   await scenario('L. /en (direct load): no picker, IGN search visible', async () => {
