@@ -1,6 +1,6 @@
 # MapleScouter English Fix
 
-A Tampermonkey userscript that makes [maplescouter.com](https://maplescouter.com) actually usable in English — full GMS-context translations, quality-of-life fixes, and no ads.
+A Tampermonkey userscript / Chrome extension that makes [maplescouter.com](https://maplescouter.com) actually usable in English — full GMS-context translations, a character picker with auto-save and cloud sync for the Manual Input page, quality-of-life fixes, and no ads.
 
 MapleScouter (환산주스탯 계산기) is the best MapleStory stat-equivalence calculator around, but its English mode ships with **thousands of missing translations** and quite a few awkward, Google-Translate-style ones. This script fixes that — and much more.
 
@@ -27,6 +27,19 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 - **Player and character names are never touched** — IGNs, rankings, and user posts stay exactly as they are.
 - Korean-only API content that can't be translated (the Latest Updates changelog) is hidden in English mode instead of showing raw Korean.
 
+### Characters & cloud sync (Manual Input page) — new in 1.5.0
+The site's **Load Preset / Save Preset** buttons on `/input` are replaced by a **Character picker** and a **sync icon** (the native windows are still one click away in the picker's footer).
+- **Auto-save.** Every preset slot is a character. Pick one and whatever you type into the form is saved into that slot as you go — no more Save window. Switching characters loads the other slot into the form instantly, without a reload.
+- **Cloud sync** with [scouter.tomerh2001.com](https://scouter.tomerh2001.com) so the same character is available from any browser:
+  - **+ Add character** asks for the IGN, saves the current inputs under it and uploads them. If that IGN already exists in the cloud you get a comparison (class/level/HEXA, dates, the exact fields that differ) and choose: overwrite the cloud, replace your local copy, or keep both.
+  - The **sync icon** shows the state of the selected character — not uploaded, synced, edited since the last upload, cloud copy newer, or conflict — and does the right thing when clicked (upload, pull, or compare). It re-checks the cloud every 30 s and whenever the tab regains focus.
+  - Cloud-only characters appear in the list; selecting one imports it as a local preset and loads it.
+  - Uploads are explicit unless you turn on **Auto-upload changes** (picker footer, off by default; uploads 3 s after you stop typing, with conflict detection).
+  - **Cloud sync: on/off** in the footer. Off means zero network calls — the picker and auto-save keep working locally.
+  - The cloud is **public and unauthenticated by design**: anyone who knows an IGN can load or overwrite it, and the list of characters is visible to everyone. Don't store anything you consider private.
+- **Export carries the IGN.** Save-as-JSON files of a linked preset contain `"ign"`, and importing such a file links the new preset again. (Because the native Save window is hidden here, the IGN is asked for when you add a character rather than when you save.)
+- Renaming a linked preset in the site's Save window unlinks it; two browser tabs editing the same character are last-writer-wins.
+
 ### Quality of life
 - **Remembers your language.** The site redirects every fresh visit to Korean; the script sends you back to your language automatically.
 - **Remembers your server selection** (GMS/KMS/JMS/TMS/MSEA) and restores it if the site wipes it.
@@ -45,6 +58,7 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 | **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~5,600 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
 | **DOM dictionary** | A `MutationObserver` + exact-match KO→EN dictionary (official game-data join) for text that's hardcoded or arrives from the API at runtime, plus pattern rules for dynamic strings (Korean number units 억/만, dates, burst-window notation like 3극 4준). |
 | **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, preset import/overwrite — all in the userscript core. |
+| **Characters & cloud** | Drives the site's own zustand stores (`manual-store` = the form's draft, `preset` = the slots), captured while webpack executes them, so loads and auto-saves need no reload. Slot↔IGN links live in `localStorage` (`msfix:cloud:*`); the backend is a small file-backed JSON API ([maplescouter-cloud](https://github.com/tomerh2001/maplescouter-cloud)) reached with plain `fetch` + `If-Match` for conflict detection. Set `localStorage.msfix:cloud:url` to point the script at another backend (e.g. a local one for testing). |
 
 ## Repo layout
 
@@ -54,6 +68,7 @@ data/        translation sources (i18n patch, dictionary, regex rules, CSS fixes
 dist/        built files served to Tampermonkey (userscript + data payload)
 work/        corpus pipeline: game-data fetch, AST extraction, batch merge
 test/        local proxy that injects the script at document-start for testing
+work/e2e-cloud.js   puppeteer end-to-end suite for the character picker + cloud sync (needs the proxy and a backend on :8080)
 build.js     bundles data/ into dist/msfix-data.js
 ```
 
@@ -63,6 +78,7 @@ Rebuild after editing data: `node build.js`. When the site ships new Korean stri
 
 - Translations aim for **official GMS terms first**, then widely-used community terms for KMS-only content with no official English name yet (e.g. Legion Champion).
 - A React hydration warning (#418) in the console is expected — the server renders Korean, the client re-renders English.
+- Cloud sync sends only the preset you explicitly upload (or, with auto-upload on, the selected character's inputs) to scouter.tomerh2001.com. Nothing else ever leaves your browser — see [PRIVACY.md](PRIVACY.md).
 - Not affiliated with maplescouter.com or Nexon. All game data © Nexon.
 
 ## License

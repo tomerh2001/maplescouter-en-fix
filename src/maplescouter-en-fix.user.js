@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MapleScouter English Fix
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.4.10
-// @description  Complete English translations for maplescouter.com (GMS-context, not literal), plus it remembers your language & server (GMS/KMS) selections.
+// @version      1.5.0
+// @description  Complete English translations for maplescouter.com (GMS-context, not literal), a character picker with auto-save + cloud sync for the Manual Input page, and it remembers your language & server (GMS/KMS) selections.
 // @author       tomerh2001
 // @license      MIT
 // @match        https://maplescouter.com/*
@@ -25,6 +25,9 @@
  *    in the app or returned by the Nexon API (equipment names, etc.).
  * 3. Persistence        — remembers your last language (/en, /ko, …) and your server/region
  *    selection (GMS/KMS/JMS/TMS/MSEA) across visits and windows.
+ * 4. Cloud characters   — on the Manual Input page, a character picker replaces the site's
+ *    Load/Save Preset buttons: inputs auto-save into the selected preset, and presets linked
+ *    to an IGN sync with scouter.tomerh2001.com (explicit upload, opt-in auto-upload).
  */
 
 (function () {
@@ -113,10 +116,35 @@
   }
 
   function applyPatch(obj) {
+    siteRefs.enBundle = obj; // the site's EN table (with our patch merged in) — used to name classes
     if (obj.__msfixPatched) return;
     try { Object.defineProperty(obj, '__msfixPatched', { value: true, enumerable: false }); } catch (e) { obj.__msfixPatched = true; }
     var patch = data().i18nPatch;
     for (var k in patch) obj[k] = patch[k];
+  }
+
+  /* -- site stores, captured passively as webpack executes each module (no forced requires) */
+  var siteRefs = { manualStore: null, presetStore: null, toast: null, enBundle: null, defaultUserStat: null };
+  function looksLikeUserStat(v) {
+    return !!(v && typeof v === 'object' && v.stat && v.hexa && v.huntSkill && v.seedRing &&
+      typeof v.isGMS === 'boolean' && typeof v.stat.myClass === 'string');
+  }
+  function noteExports(ex) {
+    if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) return;
+    var names; try { names = Object.keys(ex); } catch (e) { return; }
+    for (var i = 0; i < names.length; i++) {
+      var v; try { v = ex[names[i]]; } catch (e) { continue; }
+      if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
+      try {
+        if (!siteRefs.toast && typeof v.success === 'function' && typeof v.error === 'function' && typeof v.dismiss === 'function') siteRefs.toast = v;
+        if (!siteRefs.defaultUserStat && looksLikeUserStat(v)) siteRefs.defaultUserStat = v;
+        if (typeof v.getState === 'function' && typeof v.subscribe === 'function') {
+          var st = v.getState();
+          if (st && !siteRefs.presetStore && st.preset && typeof st.setPreset === 'function' && typeof st.deletePreset === 'function') siteRefs.presetStore = v;
+          if (st && !siteRefs.manualStore && ('draftStat' in st) && typeof st.loadDraft === 'function' && typeof st.setDraftStat === 'function') siteRefs.manualStore = v;
+        }
+      } catch (e) {}
+    }
   }
 
   function wrapFactory(factory) {
@@ -127,6 +155,7 @@
         var ex = module && module.exports;
         var payload = ex && ex.default && typeof ex.default === 'object' ? ex.default : ex;
         if (isEnBundle(payload)) applyPatch(payload);
+        noteExports(ex);
       } catch (e) {}
       return r;
     };
@@ -510,7 +539,8 @@
       return { kind: 'native', presets: [{
         data: obj.data,
         label: typeof obj.label === 'string' ? obj.label : '',
-        savedAt: typeof obj.savedAt === 'string' ? obj.savedAt : null
+        savedAt: typeof obj.savedAt === 'string' ? obj.savedAt : null,
+        ign: typeof obj.ign === 'string' && IGN_RE.test(obj.ign) ? obj.ign : null   // our export enrichment (4d)
       }] };
     }
     return null;
@@ -539,7 +569,7 @@
   }
 
   /* -- the site's own preset store + toast, found by SHAPE so module ids may change ------- */
-  var _wpReq = null, _siteApi = null;
+  var _wpReq = null;
   function wpRequire() {
     if (_wpReq) return _wpReq;
     try {
@@ -548,33 +578,15 @@
     } catch (e) {}
     return _wpReq;
   }
+  // Normally both were captured passively while the site loaded; the scan (scanSiteModules,
+  // section 4d) is only a fallback for anything missed, and only runs once the page is loaded.
   function siteApi() {
-    if (_siteApi) return _siteApi;
-    var req = wpRequire();
-    if (!req || !req.m) return null;
-    var api = { presetStore: null, toast: null };
-    for (var id in req.m) {
-      var ex; try { ex = req(id); } catch (e) { continue; }
-      if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) continue;
-      var names; try { names = Object.keys(ex); } catch (e) { continue; }
-      for (var i = 0; i < names.length; i++) {
-        var v; try { v = ex[names[i]]; } catch (e) { continue; }
-        if (!v || (typeof v !== 'object' && typeof v !== 'function')) continue;
-        try {
-          if (!api.toast && typeof v.success === 'function' && typeof v.error === 'function' && typeof v.dismiss === 'function') api.toast = v;
-          if (!api.presetStore && typeof v.getState === 'function') {
-            var st = v.getState();
-            if (st && st.preset && typeof st.setPreset === 'function' && typeof st.deletePreset === 'function') api.presetStore = v;
-          }
-        } catch (e) {}
-      }
-      if (api.presetStore && api.toast) break;
-    }
-    if (api.presetStore) _siteApi = api;
-    return api.presetStore ? api : null;
+    if (!siteRefs.presetStore) scanSiteModules();
+    return siteRefs.presetStore ? { presetStore: siteRefs.presetStore, toast: siteRefs.toast } : null;
   }
-  function toastOk(m) { var a = siteApi(); if (a && a.toast) try { a.toast.success(m); } catch (e) {} }
-  function toastErr(m) { var a = siteApi(); if (a && a.toast) try { a.toast.error(m); } catch (e) {} }
+  function siteToast() { if (siteRefs.toast) return siteRefs.toast; var a = siteApi(); return a ? a.toast : null; }
+  function toastOk(m) { var t = siteToast(); if (t) try { t.success(m); } catch (e) {} }
+  function toastErr(m) { var t = siteToast(); if (t) try { t.error(m); } catch (e) {} }
 
   /* -- dialogs assembled from the site's own utility classes so they look native --------- */
   var CLS = {
@@ -614,6 +626,7 @@
     box.className = CLS.box + ' msfix-dialog';
     box.style.setProperty('pointer-events', 'auto', 'important');
     box.setAttribute('role', 'dialog');
+    box.setAttribute('data-msfix-ui', ''); overlay.setAttribute('data-msfix-ui', ''); // never translated (IGNs/labels inside)
     var body = document.createElement('div');
     body.className = CLS.body;
     box.appendChild(body);
@@ -774,6 +787,7 @@
       savedAt: new Date().toISOString()
     };
     try { st.setPreset(map); } catch (e) { toastErr('Could not save the preset'); return; }
+    if (p.ign && !bindingByIgn(p.ign)) bindSlot(slotKey, p.ign, null); // file carried an IGN: link the slot
     toastOk('Preset ' + slotKey + ' updated' + (label ? ' (' + label + ')' : ''));
     var closeBtn = document.querySelector('[data-slot=dialog-close]');
     if (closeBtn) closeBtn.click();
@@ -889,6 +903,9 @@
 
       f.text().then(function (txt) {
         var parsed = (typeof txt === 'string' && txt.length < 5e6) ? parsePresetFile(txt) : null;
+        if (parsed && parsed.kind === 'native' && parsed.presets[0].ign) {   // link the slot the site is about to add
+          cloud.pendingImport = { ign: parsed.presets[0].ign, label: parsed.presets[0].label, at: Date.now() };
+        }
         if (!parsed || parsed.kind !== 'legacy') { deliver(txt); return; } // site handles its own files
         var usable = parsed.presets.filter(function (p) { return presetDataOk(p.data); });
         if (!usable.length) { deliver(txt); return; }                      // let the site explain why
@@ -967,9 +984,16 @@
     'N/A': "Below this boss's entry requirements"
   };
 
+  // Nodes we render ourselves (character picker, dialogs) hold raw IGNs and labels — several
+  // ASCII dictionary keys ARE player names — so the whole translation layer skips them.
+  function inOwnUi(n) {
+    var e = n && (n.nodeType === 1 ? n : n.parentElement);
+    return !!(e && e.closest && e.closest('[data-msfix-ui]'));
+  }
+
   function translateTextNode(node) {
     var v = node.nodeValue;
-    if (!v) return;
+    if (!v || inOwnUi(node)) return;
     if (HANGUL.test(v) && isPlayerNameContext(node)) return;
     var r = translateString(v);
     if (r != null && r !== v) node.nodeValue = r;
@@ -1003,6 +1027,7 @@
   var elAttempts = new WeakMap();
 
   function tryElementTranslate(el, d) {
+    if (inOwnUi(el)) return;
     var kids = el.children;
     if (kids.length > 8) return;
     for (var i = 0; i < kids.length; i++) if (!INLINE_TAGS[kids[i].tagName]) return;
@@ -1024,6 +1049,7 @@
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
 
   function translateAttrs(el) {
+    if (inOwnUi(el)) return;
     for (var i = 0; i < ATTRS.length; i++) {
       var a = ATTRS[i];
       var v = el.getAttribute && el.getAttribute(a);
@@ -1036,6 +1062,7 @@
 
   function processTree(root) {
     if (pathLocale() !== 'en') return; // dormant on the Korean/Japanese/Chinese site
+    if (inOwnUi(root)) return;
     if (root.nodeType === 3) { translateTextNode(root); return; }
     if (root.nodeType !== 1 && root.nodeType !== 11) return;
     var tag = root.nodeName;
@@ -1237,6 +1264,1032 @@
     }
   }
 
+  /* ---------------- 4d. Cloud characters ------------------------------------------------ */
+  // The Manual Input page gets a Character picker in place of the site's Load Preset /
+  // Save Preset buttons (hidden, not removed — React owns them, and the picker's footer still
+  // opens both windows). Every preset slot is a character: whatever you type into the form is
+  // saved into the selected slot as you go, and a slot linked to an IGN can be uploaded to /
+  // pulled from scouter.tomerh2001.com so the same character is available from any browser.
+  // Uploads stay explicit (the sync icon, or the add flow) unless the opt-in auto-upload
+  // toggle is on. Everything runs through the site's own zustand stores — `manual-store`
+  // (the draft the form renders from) and `preset` (the slots) — captured passively while
+  // webpack executes them (noteExports), so switching characters never needs a reload.
+  //
+  // Gotchas this code is shaped around (all observed on the live site):
+  //  - loadDraft/seedDraft/resetDraft bump draftVersion, which REMOUNTS the whole panel and
+  //    destroys our wrapper → ensureCharPicker() is idempotent and re-run after such changes.
+  //  - preset slot keys are positional (deletePreset renumbers) → bindings are re-resolved by
+  //    label (= the IGN) / savedAt on every store change, never trusted by key alone.
+  //  - the DOM translation layer rewrites ASCII strings that collide with dictionary keys
+  //    (several are IGNs) → every node we own carries data-msfix-ui and is skipped.
+  //  - the cloud is public and unauthenticated (by design): anyone can read or overwrite an
+  //    IGN, so the footer says so and nothing here is treated as private.
+
+  var CLOUD_URL = 'https://scouter.tomerh2001.com';
+  var LS_CLOUD_URL = 'msfix:cloud:url', LS_CLOUD_SLOTS = 'msfix:cloud:slots', LS_CLOUD_SELECTED = 'msfix:cloud:selected';
+  var LS_CLOUD_ENABLED = 'msfix:cloud:enabled', LS_CLOUD_AUTO = 'msfix:cloud:auto';
+  var IGN_RE = /^[A-Za-z0-9]{1,16}$/;
+  var AUTOSAVE_MS = 500, AUTOUPLOAD_MS = 3000, POLL_MS = 30000, POLL_MAX_MS = 120000, LIST_CACHE_MS = 2000, FETCH_TIMEOUT_MS = 10000;
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+  function lsJson(k, fb) { var v = lsGet(k); if (v == null) return fb; try { var o = JSON.parse(v); return o == null ? fb : o; } catch (e) { return fb; } }
+  function cloudUrl() { var u = lsGet(LS_CLOUD_URL); return (u && /^https?:\/\//.test(u) ? u : CLOUD_URL).replace(/\/+$/, ''); }
+  function cloudEnabled() { return lsGet(LS_CLOUD_ENABLED) !== 'false'; }
+  function autoUploadOn() { return lsGet(LS_CLOUD_AUTO) === 'true'; }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function eqi(a, b) { return String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase(); }
+  function nowIso() { return new Date().toISOString(); }
+
+  /* -- route gate: the picker and the hide rules apply to /{locale}/input only ---------- */
+  function isInputRoute() { return /^\/(ko|en|ja|ch)\/input(?:\/|$)/.test(location.pathname); }
+  var ROW_SEL = 'div.flex.w-full.items-center.justify-between > div.flex.gap-2:has(> button[data-slot=dialog-trigger] > svg.lucide-file-down)';
+  var IGN_SEL = 'div.flex.items-center.gap-2:has(> div.relative > input[data-slot=input] + button[data-slot=popover-trigger])';
+  // React owns <html>/<body> (attributes we set there get reconciled away), so the hide rules
+  // live in their own <style> that is simply enabled/disabled with the route.
+  var ROUTE_CSS = ROW_SEL + '{display:none!important}\n' + IGN_SEL + '{display:none!important}';
+  var CLOUD_CSS = [
+    '.msfix-charpicker [hidden]{display:none!important}',
+    '.msfix-charpicker .msfix-dd{top:100%}',
+    '.msfix-charpicker .msfix-opt[aria-selected="true"]{background-color:var(--color-surface-gray-surface-1)}',
+    '.msfix-charpicker .msfix-opt.msfix-active{background-color:var(--color-surface-gray-surface-2)}',
+    '@media (prefers-reduced-motion: reduce){.msfix-charpicker .animate-spin{animation:none}}'
+  ].join('\n');
+  var _hasSupport = null;
+  function hasSelectorSupport() {
+    if (_hasSupport === null) { try { _hasSupport = !!(window.CSS && CSS.supports && CSS.supports('selector(div:has(> a))')); } catch (e) { _hasSupport = false; } }
+    return _hasSupport;
+  }
+  function routeStyle() {
+    var st = document.getElementById('msfix-cloud-route');
+    if (st) return st;
+    if (!document.head) return null;
+    st = document.createElement('style');
+    st.id = 'msfix-cloud-route';
+    st.textContent = ROUTE_CSS;
+    document.head.appendChild(st);
+    return st;
+  }
+  function applyRouteGate() {
+    var on = isInputRoute();
+    var st = routeStyle();
+    if (st && st.disabled !== !on) st.disabled = !on;
+    try { if (document.documentElement.getAttribute('data-msfix-route') !== (on ? 'input' : '')) document.documentElement.setAttribute('data-msfix-route', on ? 'input' : ''); } catch (e) {}
+    if (hasSelectorSupport() || !document.body) return;
+    // Browsers without :has() — hide/unhide by hand (the header search persists across SPA
+    // navigations, so it must be shown again when leaving the page).
+    var row = nativePresetRow();
+    if (row) row.style.display = on ? 'none' : '';
+    var btns = document.querySelectorAll('input[data-slot=input] + button[data-slot=popover-trigger]');
+    for (var i = 0; i < btns.length; i++) {
+      var block = btns[i].parentElement && btns[i].parentElement.parentElement;
+      if (block) block.style.display = on ? 'none' : '';
+    }
+  }
+  function injectCloudCss() {
+    if (document.getElementById('msfix-cloud-style')) return;
+    var st = document.createElement('style');
+    st.id = 'msfix-cloud-style';
+    st.textContent = CLOUD_CSS;
+    (document.head || document.documentElement).appendChild(st);
+    applyRouteGate();
+  }
+  // The native row: [Load Preset][Save Preset] — the Load button carries the file-down icon.
+  function nativePresetRow() {
+    var svg = document.querySelector('div.flex.w-full.items-center.justify-between > div.flex.gap-2 > button[data-slot=dialog-trigger] > svg.lucide-file-down');
+    return svg ? svg.parentElement.parentElement : null;
+  }
+  function nativeTrigger(kind) {
+    var row = nativePresetRow(); if (!row) return null;
+    var svg = row.querySelector(kind === 'load' ? 'svg.lucide-file-down' : 'svg.lucide-download');
+    return svg ? svg.parentElement : null;
+  }
+
+  /* -- site stores (passively captured in wrapFactory; lazy scan only after load) -------- */
+  var _scanAt = 0;
+  function scanSiteModules() {
+    var req = wpRequire(); if (!req || !req.m) return;
+    _scanAt = Date.now();
+    for (var id in req.m) {
+      if (siteRefs.presetStore && siteRefs.toast && siteRefs.manualStore) break;
+      var ex; try { ex = req(id); } catch (e) { continue; }
+      noteExports(ex);
+    }
+  }
+  function cloudStores() {
+    if (!siteRefs.manualStore || !siteRefs.presetStore) {
+      // Force-requiring modules while chunks are still arriving has produced page errors;
+      // only fall back to a scan once the page is fully loaded, and not more than every 5 s.
+      if (document.readyState === 'complete' && Date.now() - _scanAt > 5000) scanSiteModules();
+    }
+    return (siteRefs.manualStore && siteRefs.presetStore) ? { ms: siteRefs.manualStore, ps: siteRefs.presetStore } : null;
+  }
+  function presetMap() { var s = cloudStores(); if (!s) return {}; try { return s.ps.getState().preset || {}; } catch (e) { return {}; } }
+  function setPresetMap(map) { var s = cloudStores(); if (!s) return false; try { s.ps.getState().setPreset(map); return true; } catch (e) { toastErr('Could not write the preset'); return false; } }
+  function currentDraft() { var s = cloudStores(); if (!s) return null; try { return s.ms.getState().draftStat; } catch (e) { return null; } }
+  function slotKeys(map) { return Object.keys(map).sort(function (a, b) { return (+a) - (+b); }); }
+
+  /* -- bindings: slotKey -> { ign, label, savedAt, cloudUpdatedAt, remoteUpdatedAt, syncedHash, syncedAt } */
+  var cloud = {
+    bindings: {}, selected: null,       // selected = { key, ign, label, savedAt }
+    list: null, listAt: 0, listErr: false, listBusy: false,
+    offline: false, busy: 0, subscribed: false, lastLoaded: null,
+    saveTimer: null, uploadTimer: null, pollTimer: null, pollDelay: POLL_MS, pendingImport: null, conflictToastKey: null
+  };
+  function loadBindings() {
+    var b = lsJson(LS_CLOUD_SLOTS, {}); cloud.bindings = (b && typeof b === 'object' && !Array.isArray(b)) ? b : {};
+    var s = lsJson(LS_CLOUD_SELECTED, null); cloud.selected = (s && typeof s === 'object' && s.key) ? s : null;
+  }
+  function saveBindings() {
+    lsSet(LS_CLOUD_SLOTS, JSON.stringify(cloud.bindings));
+    lsSet(LS_CLOUD_SELECTED, cloud.selected ? JSON.stringify(cloud.selected) : null);
+  }
+  function slotMatchesBinding(s, b) {
+    if (!s) return false;
+    if (eqi(s.label, b.ign)) return true;
+    if (b.label && eqi(s.label, b.label)) return true;
+    return !!(b.savedAt && s.savedAt === b.savedAt);
+  }
+  function slotMatchesSel(s, sel) {
+    if (!s) return false;
+    if (sel.label) return eqi(s.label, sel.label) || (sel.ign && eqi(s.label, sel.ign));
+    return !!(sel.savedAt && s.savedAt === sel.savedAt);
+  }
+  // Slot keys are positional and the site renumbers them on delete, so bindings are matched
+  // by content (label = IGN, or the savedAt we wrote) against the live map on every change.
+  function reconcileBindings() {
+    var map = presetMap(), keys = slotKeys(map), out = {}, used = {}, old = cloud.bindings;
+    Object.keys(old).forEach(function (k) {
+      var b = old[k]; if (!b || !b.ign) return;
+      var hit = null;
+      if (map[k] && !used[k] && slotMatchesBinding(map[k], b)) hit = k;
+      for (var i = 0; i < keys.length && !hit; i++) if (!used[keys[i]] && slotMatchesBinding(map[keys[i]], b)) hit = keys[i];
+      if (!hit) return;
+      used[hit] = true; b.label = map[hit].label || ''; if (map[hit].savedAt) b.savedAt = map[hit].savedAt; out[hit] = b;
+    });
+    cloud.bindings = out;
+    if (cloud.selected) {
+      var sel = cloud.selected, key = null;
+      if (map[sel.key] && slotMatchesSel(map[sel.key], sel)) key = sel.key;
+      for (var j = 0; j < keys.length && !key; j++) if (slotMatchesSel(map[keys[j]], sel)) key = keys[j];
+      if (!key) cloud.selected = null;
+      else { sel.key = key; sel.label = map[key].label || ''; if (map[key].savedAt) sel.savedAt = map[key].savedAt; sel.ign = out[key] ? out[key].ign : null; }
+    }
+    saveBindings();
+  }
+  function selectedKey() { return cloud.selected ? cloud.selected.key : null; }
+  function bindingByIgn(ign) { for (var k in cloud.bindings) if (cloud.bindings[k] && eqi(cloud.bindings[k].ign, ign)) return { key: k, binding: cloud.bindings[k] }; return null; }
+  function ignForSlot(slotKey) { var b = cloud.bindings[slotKey]; return b && b.ign ? b.ign : null; }
+
+  /* -- hashing (canonical JSON, sorted keys) to tell "edited since last upload" ---------- */
+  function canon(v) {
+    if (Array.isArray(v)) { var a = []; for (var i = 0; i < v.length; i++) a.push(canon(v[i])); return '[' + a.join(',') + ']'; }
+    if (v && typeof v === 'object') { var ks = Object.keys(v).sort(), o = []; for (var j = 0; j < ks.length; j++) o.push(JSON.stringify(ks[j]) + ':' + canon(v[ks[j]])); return '{' + o.join(',') + '}'; }
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  function hashData(d) {
+    var s = canon(d || null), h = 0x811c9dc5;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return ('0000000' + h.toString(16)).slice(-8) + ':' + s.length;
+  }
+
+  /* -- display helpers ------------------------------------------------------------------- */
+  function classEn(ko) { var d = data(); return (siteRefs.enBundle && siteRefs.enBundle[ko]) || d.i18nPatch[ko] || d.dict[ko] || ko || ''; }
+  function slotMeta(sd) {
+    var st = (sd && sd.stat) || {}; var lv = Number(st.level); var hx = sd && sd.hexa ? Number(sd.hexa.hexaStat) : 0;
+    return { classKo: st.myClass || '', classEn: classEn(st.myClass || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexaStat: isFinite(hx) && hx > 0 ? hx : 0 };
+  }
+  function docMeta(doc) {
+    var m = doc && doc.meta; var p = doc && doc.preset && doc.preset.data;
+    if (p && p.stat) return slotMeta(p);
+    var lv = m ? Number(m.level) : 0, hx = m ? Number(m.hexaStat) : 0;
+    return { classKo: (m && m.class) || '', classEn: classEn((m && m.class) || ''), level: isFinite(lv) && lv > 0 ? lv : 0, hexaStat: isFinite(hx) && hx > 0 ? hx : 0 };
+  }
+  function metaLine(m) { if (!m.classKo && !m.level) return 'empty preset'; return (m.classEn || '?') + ' Lv ' + m.level + (m.hexaStat ? ' · HEXA ' + m.hexaStat : ''); }
+  function relTime(iso) {
+    if (!iso) return 'never';
+    var t = new Date(iso).getTime(); if (isNaN(t)) return '';
+    var d = Math.max(0, Date.now() - t), m = Math.round(d / 60000);
+    if (m < 1) return 'just now'; if (m < 60) return m + ' min ago';
+    var h = Math.round(m / 60); if (h < 48) return h + ' h ago';
+    var days = Math.round(h / 24); if (days < 30) return days + ' d ago';
+    return new Date(iso).toLocaleDateString();
+  }
+  function dayDate(iso) { if (!iso) return ''; var t = new Date(iso); return isNaN(t.getTime()) ? '' : t.toLocaleDateString(); }
+  function slotName(key, slot) {
+    var b = cloud.bindings[key];
+    if (b && b.ign) return b.ign + (slot && slot.label && !eqi(slot.label, b.ign) ? ' · ' + slot.label : '');
+    return (slot && slot.label) || (slot && presetDataOk(slot.data) ? autoPresetLabel(slot.data) : '') || ('Preset ' + key);
+  }
+  function svgIcon(name, extra) {
+    var P = {
+      'cloud': '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+      'cloud-off': '<path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/>',
+      'cloud-check': '<path d="m17 15-5.5 5.5L9 18"/><path d="M5 17.743A7 7 0 1 1 15.71 10h1.79a4.5 4.5 0 0 1 1.5 8.742"/>',
+      'cloud-alert': '<path d="M12 12v4"/><path d="M12 20h.01"/><path d="M17 18h.5a1 1 0 0 0 0-9h-1.79A7 7 0 1 0 5 17.5"/>',
+      'cloud-upload': '<path d="M12 13v8"/><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="m8 17 4-4 4 4"/>',
+      'cloud-download': '<path d="M12 13v8l-4-4"/><path d="m12 21 4-4"/><path d="M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284"/>',
+      'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
+      'plus': '<path d="M5 12h14"/><path d="M12 5v14"/>',
+      'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>'
+    };
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-' + name + ' size-4' + (extra ? ' ' + extra : '') + '">' + (P[name] || '') + '</svg>';
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  /* -- network (all failures are soft: the icon goes "offline", nothing else breaks) ----- */
+  function setOffline(flag) {
+    if (cloud.offline === flag) return;
+    cloud.offline = flag;
+    if (flag) toastErr('Cloud unavailable — working offline');
+    updateIcon(); renderDropdown();
+  }
+  function cloudFetch(method, path, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve, reject) {
+      if (!cloudEnabled()) { reject({ disabled: true }); return; }
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, FETCH_TIMEOUT_MS);
+      var headers = {}; if (opts.body) headers['Content-Type'] = 'application/json';
+      if (opts.headers) for (var k in opts.headers) headers[k] = opts.headers[k];
+      var init = { method: method, headers: headers, mode: 'cors', cache: 'no-store' };
+      if (opts.body) init.body = JSON.stringify(opts.body);
+      if (ctrl) init.signal = ctrl.signal;
+      var done = function (res, json) {
+        setOffline(false);
+        var etag = (res.headers.get('ETag') || '').replace(/^W\//, '').replace(/"/g, '');
+        resolve({ status: res.status, ok: res.ok, json: json, etag: etag });
+      };
+      fetch(cloudUrl() + path, init).then(function (res) {
+        clearTimeout(timer);
+        if (method === 'HEAD' || res.status === 204) { done(res, null); return; }
+        res.text().then(function (t) { var j = null; try { j = t ? JSON.parse(t) : null; } catch (e) {} done(res, j); }, function () { done(res, null); });
+      }, function (err) { clearTimeout(timer); setOffline(true); reject({ offline: true, error: err }); });
+    });
+  }
+  function busy(delta) { cloud.busy = Math.max(0, cloud.busy + delta); updateIcon(); }
+  function cloudPath(ign) { return '/v1/characters/' + encodeURIComponent(String(ign)); } // the server lowercases the key
+
+  // The public list is everyone's characters; it is only fetched when the dropdown opens
+  // (never per keystroke) and is shown in full only once you have typed two characters.
+  function refreshCloudList(force, cb) {
+    if (!cloudEnabled()) { cloud.list = null; if (cb) cb(); return; }
+    if (!force && cloud.list && Date.now() - cloud.listAt < LIST_CACHE_MS) { if (cb) cb(); return; }
+    if (cloud.listBusy) { if (cb) cb(); return; }
+    cloud.listBusy = true; renderDropdown();
+    cloudFetch('GET', '/v1/characters').then(function (r) {
+      cloud.listBusy = false;
+      if (r.ok && r.json && Array.isArray(r.json.characters)) {
+        cloud.list = r.json.characters.filter(function (c) { return c && IGN_RE.test(c.ign || ''); });
+        cloud.listAt = Date.now(); cloud.listErr = false;
+        for (var k in cloud.bindings) {
+          var b = cloud.bindings[k]; if (!b || !b.ign) continue;
+          for (var i = 0; i < cloud.list.length; i++) if (eqi(cloud.list[i].ign, b.ign)) { b.remoteUpdatedAt = cloud.list[i].updatedAt || b.remoteUpdatedAt; break; }
+        }
+        saveBindings();
+      } else cloud.listErr = true;
+      renderDropdown(); updateIcon(); if (cb) cb();
+    }, function () { cloud.listBusy = false; cloud.listErr = true; renderDropdown(); updateIcon(); if (cb) cb(); });
+  }
+  function checkRemote(key, cb) {
+    var b = cloud.bindings[key];
+    if (!b || !b.ign || !cloudEnabled()) { if (cb) cb(null); return; }
+    cloudFetch('HEAD', cloudPath(b.ign)).then(function (r) {
+      if (r.status === 404) { b.remoteUpdatedAt = null; b.cloudUpdatedAt = null; }
+      else if (r.ok && r.etag) b.remoteUpdatedAt = r.etag;
+      saveBindings(); updateIcon(); if (cb) cb(r);
+    }, function () { updateIcon(); if (cb) cb(null); });
+  }
+  function fetchDoc(ign, cb) {
+    busy(1);
+    cloudFetch('GET', cloudPath(ign)).then(function (r) {
+      busy(-1);
+      if (r.status === 404) { cb(null, null); return; }
+      if (!r.ok || !r.json) { cb({ status: r.status, json: r.json }, null); return; }
+      cb(null, r.json);
+    }, function (e) { busy(-1); cb(e, null); });
+  }
+  function docPresetData(doc) {
+    var d = doc && doc.preset && doc.preset.data;
+    if (!d || !d.stat) return null;
+    var tmpl = currentUserStatTemplate() || siteRefs.defaultUserStat;
+    return tmpl ? conformTo(tmpl, d) : d;
+  }
+
+  /* -- polling: HEAD the selected character every 30 s (backing off) and on focus -------- */
+  function stopPolling() { if (cloud.pollTimer) { clearTimeout(cloud.pollTimer); cloud.pollTimer = null; } }
+  function startPolling() { if (cloud.pollTimer) return; cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay); }
+  function pollTick(immediate) {
+    stopPolling();
+    var key = selectedKey();
+    if (!isInputRoute() || !cloudEnabled() || !key || !cloud.bindings[key] || !cloud.bindings[key].ign) { cloud.pollDelay = POLL_MS; return; }
+    if (document.hidden && !immediate) { cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay); return; }
+    checkRemote(key, function (r) {
+      cloud.pollDelay = r ? POLL_MS : Math.min(POLL_MAX_MS, cloud.pollDelay * 2);
+      cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay);
+    });
+  }
+
+  /* -- sync state ------------------------------------------------------------------------ */
+  function syncInfo() {
+    var key = selectedKey();
+    if (!key) return { state: 'none' };
+    var b = cloud.bindings[key];
+    if (!b || !b.ign) return { state: 'unlinked', key: key };
+    if (!cloudEnabled()) return { state: 'off', key: key, b: b };
+    var d = currentDraft(), h = d ? hashData(d) : null;
+    var localChanged = !b.syncedHash || (!!h && h !== b.syncedHash);
+    if (!b.cloudUpdatedAt) return { state: 'not-uploaded', key: key, b: b };
+    if (cloud.offline) return { state: 'offline', key: key, b: b };
+    var cloudChanged = !!(b.remoteUpdatedAt && b.remoteUpdatedAt !== b.cloudUpdatedAt);
+    if (!localChanged && !cloudChanged) return { state: 'synced', key: key, b: b };
+    if (localChanged && !cloudChanged) return { state: 'local-ahead', key: key, b: b };
+    if (!localChanged && cloudChanged) return { state: 'cloud-ahead', key: key, b: b };
+    return { state: 'conflict', key: key, b: b };
+  }
+  var ICON_STATES = {
+    'none':         { icon: 'cloud',          color: 'text-text-gray-low', title: 'No character selected — inputs are not being saved. Pick one from the list.' },
+    'unlinked':     { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Saved locally as a preset; not linked to an IGN. Click to link and upload.' },
+    'off':          { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Cloud sync is off (toggle it in the character list footer).' },
+    'not-uploaded': { icon: 'cloud-upload',   color: 'text-text-gray-low', title: 'Not in the cloud yet — click to upload.' },
+    'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable — click to retry.' },
+    'synced':       { icon: 'cloud-check',    color: 'text-green-600',     title: 'Synced with the cloud.' },
+    'local-ahead':  { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited since the last upload — click to upload.' },
+    'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer — click to compare and pull it.' },
+    'conflict':     { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited here AND changed in the cloud — click to compare.' }
+  };
+  function updateIcon() {
+    if (!picker.icon) return;
+    var info = syncInfo(), st = ICON_STATES[info.state] || ICON_STATES.none;
+    var b = info.b, title = st.title;
+    if (b && b.ign) title = b.ign + ' — ' + title + (info.state === 'synced' && b.syncedAt ? ' Uploaded ' + relTime(b.syncedAt) + '.' : '');
+    var busyNow = cloud.busy > 0;
+    picker.icon.className = SOFT_BASE + ' msfix-sync ' + (busyNow ? 'text-text-gray-low' : st.color);
+    picker.icon.innerHTML = busyNow ? svgIcon('loader', 'animate-spin') : svgIcon(st.icon);
+    picker.icon.title = busyNow ? 'Working…' : title;
+    picker.icon.setAttribute('aria-label', picker.icon.title);
+    picker.icon.setAttribute('data-msfix-sync', busyNow ? 'busy' : info.state);
+    if (picker.live && picker.live.textContent !== title) picker.live.textContent = title;
+  }
+
+  /* -- selection / loading --------------------------------------------------------------- */
+  function loadIntoForm(key) {
+    var s = cloudStores(), slot = presetMap()[key];
+    if (!s || !slot || !slot.data) return false;
+    var d = clone(slot.data);
+    cloud.lastLoaded = d;
+    try { s.ms.getState().loadDraft(d); } catch (e) { toastErr('Could not load the character'); return false; }
+    return true;
+  }
+  function setSelected(key, load, quiet) {
+    var map = presetMap(), slot = map[key];
+    if (!slot) return false;
+    var b = cloud.bindings[key];
+    cloud.selected = { key: key, ign: b ? b.ign : null, label: slot.label || '', savedAt: slot.savedAt || null };
+    saveBindings();
+    if (load && !loadIntoForm(key)) return false;
+    renderTrigger(); updateIcon();
+    if (!quiet) toastOk((load ? 'Loaded ' : 'Selected ') + slotName(key, slot));
+    if (b && b.ign) { cloud.pollDelay = POLL_MS; checkRemote(key); startPolling(); }
+    return true;
+  }
+  function deselect(reason) {
+    if (!cloud.selected) return;
+    cloud.selected = null; saveBindings();
+    renderTrigger(); updateIcon();
+    if (reason) toastOk(reason);
+  }
+  // After a structural draft change we did not cause (native Load, Reset, a seeded search
+  // result, Undo) find out which slot — if any — the form now shows.
+  function resolveSelectionFromDraft(draft, strict) {
+    if (!draft) return;
+    var h = hashData(draft), map = presetMap(), keys = slotKeys(map), cur = selectedKey();
+    if (cur && map[cur] && hashData(map[cur].data) === h) return;
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] === cur || !map[keys[i]] || !presetDataOk(map[keys[i]].data)) continue;
+      if (hashData(map[keys[i]].data) === h) { setSelected(keys[i], false, true); return; }
+    }
+    if (strict && cur) deselect('Inputs no longer match ' + slotName(cur, map[cur]) + ' — pick a character to resume saving');
+  }
+
+  /* -- auto-save: the draft goes into the selected slot 500 ms after the last change ------ */
+  function writeDraftToSlot(key, draft) {
+    var map = clone(presetMap()), slot = map[key];
+    if (!slot) return false;
+    var now = nowIso();
+    map[key] = { data: clone(draft), label: slot.label || '', savedAt: now };
+    if (!setPresetMap(map)) return false;
+    var b = cloud.bindings[key]; if (b) { b.savedAt = now; b.label = map[key].label; }
+    if (cloud.selected && cloud.selected.key === key) { cloud.selected.savedAt = now; cloud.selected.label = map[key].label; }
+    saveBindings();
+    return true;
+  }
+  function flushAutosave() {
+    if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; }
+    autosaveTick(true);
+  }
+  function autosaveTick(noUpload) {
+    cloud.saveTimer = null;
+    var key = selectedKey(); if (!key) return;
+    var d = currentDraft(); if (!d || !presetDataOk(d)) return;
+    var slot = presetMap()[key]; if (!slot) return;
+    if (hashData(slot.data) === hashData(d)) return;
+    if (!writeDraftToSlot(key, d)) return;
+    updateIcon(); if (picker.open) renderDropdown();
+    var b = cloud.bindings[key];
+    if (!noUpload && autoUploadOn() && cloudEnabled() && b && b.ign) scheduleAutoUpload(key);
+  }
+  function scheduleAutoUpload(key) {
+    if (cloud.uploadTimer) clearTimeout(cloud.uploadTimer);
+    cloud.uploadTimer = setTimeout(function () {
+      cloud.uploadTimer = null;
+      var info = syncInfo();
+      if (info.key !== key || (info.state !== 'local-ahead' && info.state !== 'not-uploaded')) return;
+      uploadSlot(key, { quiet: true, onConflict: function () {
+        // never pop a modal mid-edit: the icon shows the conflict, one toast per character
+        if (cloud.conflictToastKey !== key) { cloud.conflictToastKey = key; toastErr(cloud.bindings[key].ign + ' changed in the cloud — click the sync icon to compare'); }
+      } });
+    }, AUTOUPLOAD_MS);
+  }
+  function onDraftChange(s, prev) {
+    if (!s || !prev || s.draftStat === prev.draftStat) return;
+    var structural = s.draftVersion !== prev.draftVersion;
+    if (structural) { setTimeout(ensureCharPicker, 0); setTimeout(ensureCharPicker, 250); setTimeout(ensureCharPicker, 900); }
+    if (s.draftStat === cloud.lastLoaded) { updateIcon(); return; }   // our own load echoing back
+    if (structural) { resolveSelectionFromDraft(s.draftStat, true); updateIcon(); return; }
+    if (cloud.saveTimer) clearTimeout(cloud.saveTimer);
+    cloud.saveTimer = setTimeout(autosaveTick, AUTOSAVE_MS);
+    updateIcon();
+  }
+  function onPresetChange() {
+    reconcileBindings(); checkPendingImport();
+    renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+  }
+  function ensureSubscriptions() {
+    if (cloud.subscribed) return true;
+    var s = cloudStores(); if (!s) return false;
+    cloud.subscribed = true;
+    reconcileBindings();
+    resolveSelectionFromDraft(currentDraft(), false);
+    try { s.ms.subscribe(onDraftChange); } catch (e) {}
+    try { s.ps.subscribe(onPresetChange); } catch (e) {}
+    return true;
+  }
+  // A native import of a file that carries "ign" (our export enrichment) is bound once the
+  // site has added its slot.
+  function checkPendingImport() {
+    var p = cloud.pendingImport; if (!p) return;
+    if (Date.now() - p.at > 15000) { cloud.pendingImport = null; return; }
+    if (bindingByIgn(p.ign)) { cloud.pendingImport = null; return; }
+    var map = presetMap(), keys = slotKeys(map);
+    for (var i = keys.length - 1; i >= 0; i--) {
+      var s = map[keys[i]];
+      if (cloud.bindings[keys[i]] || !s || !presetDataOk(s.data)) continue;
+      if (eqi(s.label, p.label) || eqi(s.label, p.ign)) { bindSlot(keys[i], p.ign, null); cloud.pendingImport = null; return; }
+    }
+  }
+  function bindSlot(key, ign, doc) {
+    var slot = presetMap()[key]; if (!slot) return;
+    var prev = cloud.bindings[key] || {};
+    if (prev.ign && eqi(prev.ign, ign)) ign = prev.ign;   // keep the case the user typed
+    cloud.bindings[key] = {
+      ign: ign, label: slot.label || '', savedAt: slot.savedAt || null,
+      cloudUpdatedAt: doc ? doc.updatedAt : (prev.ign && eqi(prev.ign, ign) ? prev.cloudUpdatedAt : null),
+      remoteUpdatedAt: doc ? doc.updatedAt : null,
+      syncedHash: doc ? hashData(slot.data) : (prev.ign && eqi(prev.ign, ign) ? prev.syncedHash : null),
+      syncedAt: doc ? nowIso() : null
+    };
+    if (cloud.selected && cloud.selected.key === key) cloud.selected.ign = ign;
+    saveBindings();
+  }
+
+  /* -- slot writes ----------------------------------------------------------------------- */
+  function allocSlotKey(map) {
+    var keys = slotKeys(map);
+    for (var i = 0; i < keys.length; i++) {   // reuse an untouched slot before appending
+      var s = map[keys[i]];
+      if (s && !presetDataOk(s.data) && !(s.label || '').trim() && !cloud.bindings[keys[i]]) return keys[i];
+    }
+    var max = 0; keys.forEach(function (k) { if (+k > max) max = +k; });
+    return String(max + 1);
+  }
+  // Write `data` under `label` into `key` (or a fresh slot) and return the key.
+  function writeSlot(key, data, label) {
+    var map = clone(presetMap());
+    if (!key) key = allocSlotKey(map);
+    map[key] = { data: clone(data), label: label || '', savedAt: nowIso() };
+    return setPresetMap(map) ? key : null;
+  }
+  // Pull the cloud document into a slot (writing it, re-binding, and reloading the form if
+  // that slot is the selected one).
+  function applyCloudDoc(key, doc) {
+    var dataIn = docPresetData(doc);
+    if (!dataIn || !presetDataOk(dataIn)) { toastErr('The cloud copy of ' + doc.ign + ' is not a valid preset'); return null; }
+    var cur = presetMap()[key];
+    key = writeSlot(key, dataIn, (cur && cur.label) || doc.ign);
+    if (!key) return null;
+    bindSlot(key, doc.ign || cloud.bindings[key].ign, doc);
+    if (selectedKey() === key) { loadIntoForm(key); renderTrigger(); updateIcon(); }
+    return key;
+  }
+  function uploadSlot(key, opts, cb) {
+    opts = opts || {};
+    if (key === selectedKey()) flushAutosave();
+    var slot = presetMap()[key], b = cloud.bindings[key];
+    if (!slot || !b || !b.ign) { if (cb) cb(false); return; }
+    if (!presetDataOk(slot.data)) { toastErr('Enter a class and level before uploading'); if (cb) cb(false); return; }
+    var m = slotMeta(slot.data);
+    var body = {
+      preset: { type: 'maplescouter-manual-preset', v: 1, savedAt: slot.savedAt || nowIso(), label: slot.label || b.ign, data: slot.data },
+      label: slot.label || b.ign,
+      meta: { 'class': m.classKo, level: m.level, hexaStat: m.hexaStat }
+    };
+    var headers = {};
+    if (b.cloudUpdatedAt && opts.ifMatch !== false) headers['If-Match'] = '"' + b.cloudUpdatedAt + '"';
+    busy(1);
+    cloudFetch('PUT', cloudPath(b.ign), { body: body, headers: headers }).then(function (r) {
+      busy(-1);
+      if (r.ok) {
+        var up = (r.json && r.json.updatedAt) || r.etag || nowIso();
+        b.cloudUpdatedAt = up; b.remoteUpdatedAt = up; b.syncedHash = hashData(slot.data); b.syncedAt = nowIso();
+        cloud.conflictToastKey = null; cloud.listAt = 0; saveBindings(); updateIcon();
+        if (!opts.quiet) toastOk('Uploaded ' + b.ign + ' to the cloud');
+        if (cb) cb(true);
+      } else if (r.status === 409) {
+        var remote = r.json ? r.json.updatedAt : undefined;
+        if (remote === null) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; } else if (remote) b.remoteUpdatedAt = remote;
+        saveBindings(); updateIcon();
+        if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud — click the sync icon to compare');
+        if (cb) cb(false);
+      } else {
+        toastErr(r.status === 429 ? 'The cloud is rate-limiting uploads — try again in a minute'
+          : 'Cloud upload failed (' + r.status + (r.json && r.json.error ? ' ' + r.json.error : '') + ')');
+        if (cb) cb(false);
+      }
+    }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable — upload skipped'); updateIcon(); if (cb) cb(false); });
+  }
+
+  /* -- dialogs --------------------------------------------------------------------------- */
+  function confirmDialog(title, subtitle, goLabel, onGo, extraBuild) {
+    msDialog({ title: title, subtitle: subtitle, build: function (body, close) {
+      if (extraBuild) extraBuild(body);
+      msActions(body, 'Cancel', function () { close(); }, goLabel, function () { close(); onGo(); });
+    } });
+  }
+  function leafDiff(a, b, path, out) {
+    if (out.length > 300) return;
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+      var keys = {}; Object.keys(a).forEach(function (k) { keys[k] = 1; }); Object.keys(b).forEach(function (k) { keys[k] = 1; });
+      Object.keys(keys).sort().forEach(function (k) { leafDiff(a[k], b[k], path ? path + '.' + k : k, out); });
+      return;
+    }
+    if (a !== b && !(a == null && b == null)) out.push({ path: path, a: a, b: b });
+  }
+  function fmtVal(v) {
+    if (v === '' || v == null) return '—';
+    if (typeof v === 'string' && HANGUL.test(v)) v = classEn(v);
+    var s = typeof v === 'string' ? v : JSON.stringify(v);
+    return s.length > 22 ? s.slice(0, 21) + '…' : s;
+  }
+  function infoCard(body, heading, lines) {
+    var card = el('div', 'outline outline-outline-gray-med rounded-lg px-3 py-2 flex flex-col gap-0.5 text-left');
+    card.appendChild(el('span', 'text-sm font-semibold truncate', heading));
+    lines.forEach(function (l) { if (l) card.appendChild(el('span', 'text-text-gray-low text-xs truncate', l)); });
+    body.appendChild(card);
+    return card;
+  }
+  // Both sides of a local/cloud disagreement with what actually differs, then a choice.
+  function compareDialog(o) {
+    closePicker();
+    var lm = slotMeta(o.localData), cm = docMeta(o.doc), cloudData = docPresetData(o.doc);
+    var diffs = []; if (cloudData) leafDiff(o.localData, cloudData, '', diffs);
+    msDialog({
+      title: o.title || (o.ign + ' exists in the cloud'),
+      subtitle: o.subtitle || 'Choose which version to keep.',
+      build: function (body, close) {
+        infoCard(body, 'Local — ' + (o.localLabel || o.ign), [metaLine(lm),
+          'Edited ' + relTime(o.localSavedAt) + ' · last uploaded ' + relTime(o.localSyncedAt)]);
+        infoCard(body, 'Cloud — ' + o.doc.ign, [metaLine(cm),
+          'Updated ' + relTime(o.doc.updatedAt) + (o.doc.updatedAt ? ' (' + shortDate(o.doc.updatedAt) + ')' : '')]);
+        if (diffs.length) {
+          var box = el('div', 'flex flex-col gap-0.5 text-left');
+          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + ' field' + (diffs.length === 1 ? '' : 's') + ' differ' + (diffs.length === 1 ? 's' : '') + ' (local → cloud)'));
+          diffs.slice(0, 8).forEach(function (d) { box.appendChild(el('span', 'text-text-gray-low text-xs truncate', d.path + ': ' + fmtVal(d.a) + ' → ' + fmtVal(d.b))); });
+          if (diffs.length > 8) box.appendChild(el('span', 'text-text-gray-low text-xs', '… and ' + (diffs.length - 8) + ' more'));
+          body.appendChild(box);
+        } else if (cloudData) body.appendChild(el('span', CLS.hint, 'Both versions hold the same inputs.'));
+        var list = el('div', CLS.list);
+        list.appendChild(msRow('Overwrite cloud with current inputs', 'Your local version replaces ' + o.doc.ign + ' in the cloud', function () { close(); o.onOverwriteCloud(); }));
+        list.appendChild(msRow('Replace local with cloud version', 'The cloud copy is loaded into the form', function () { close(); o.onReplaceLocal(); }));
+        if (o.onSaveAsNew) list.appendChild(msRow('Keep both: save cloud copy as a new preset', 'Nothing is uploaded or overwritten', function () { close(); o.onSaveAsNew(); }));
+        body.appendChild(list);
+        var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button';
+        cancel.addEventListener('click', function () { close(); });
+        body.appendChild(cancel);
+      }
+    });
+  }
+  // The sync icon's click: one action per state.
+  function onSyncClick() {
+    closePicker();
+    var info = syncInfo(), key = info.key, b = info.b, map = presetMap();
+    switch (info.state) {
+      case 'none': openPicker(); return;
+      case 'off': openPicker(); toastOk('Cloud sync is off — toggle it in the list footer'); return;
+      case 'unlinked': openAddDialog(map[key] && IGN_RE.test(map[key].label || '') ? map[key].label : '', { linkKey: key }); return;
+      case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
+      case 'synced': checkRemote(key, function (r) { if (r && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
+      case 'not-uploaded':
+        confirmDialog('Upload ' + b.ign + ' to the cloud?', metaLine(slotMeta(map[key].data)) + ' · anyone with the IGN can load it.', 'Upload', function () { uploadSlot(key, { ifMatch: false }); });
+        return;
+      case 'local-ahead':
+        confirmDialog('Upload your changes to ' + b.ign + '?', 'Edited ' + relTime(b.savedAt) + ' · last uploaded ' + relTime(b.syncedAt) + '.', 'Upload', function () {
+          uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
+        });
+        return;
+      default: openCompareForSlot(key); return;
+    }
+  }
+  function openCompareForSlot(key) {
+    var b = cloud.bindings[key], slot = presetMap()[key];
+    if (!b || !slot) return;
+    flushAutosave();
+    fetchDoc(b.ign, function (err, doc) {
+      if (err) { toastErr(err.offline ? 'Cloud unavailable' : 'Could not read ' + b.ign + ' from the cloud'); return; }
+      if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud — click the icon to upload it again'); return; }
+      slot = presetMap()[key];
+      compareDialog({
+        ign: b.ign, doc: doc, localData: slot.data, localLabel: slotName(key, slot), localSavedAt: slot.savedAt, localSyncedAt: b.syncedAt,
+        title: b.ign + ': local and cloud differ',
+        onOverwriteCloud: function () { b.cloudUpdatedAt = doc.updatedAt; saveBindings(); uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); },
+        onReplaceLocal: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud version of ' + b.ign); },
+        onSaveAsNew: function () {
+          var d = docPresetData(doc); if (!d) return;
+          var nk = writeSlot(null, d, doc.ign + ' (cloud)');
+          if (nk) { toastOk('Saved the cloud version as Preset ' + nk); }
+        }
+      });
+    });
+  }
+  // "+ Add character": IGN → look it up → save current inputs (and upload) or compare.
+  function openAddDialog(prefill, opts) {
+    opts = opts || {};
+    closePicker();
+    var map = presetMap(), sel = selectedKey();
+    // With an unlinked preset selected, adding links THAT preset (the form shows its inputs)
+    // instead of duplicating it into a new slot.
+    var linkKey = opts.linkKey || (sel && map[sel] && !(cloud.bindings[sel] && cloud.bindings[sel].ign) ? sel : null);
+    var draft = currentDraft();
+    var localData = (linkKey && linkKey !== sel) ? map[linkKey].data : draft;
+    if (!presetDataOk(localData)) { toastErr('Enter a class and level first'); return; }
+    msDialog({
+      title: linkKey ? 'Link ' + slotName(linkKey, map[linkKey]) + ' to an IGN' : 'Add character',
+      subtitle: linkKey ? 'The preset keeps its inputs and is renamed to the IGN.' : 'Saves the current inputs as a new character.',
+      build: function (body, close) {
+        var input = el('input', CLS.input); input.setAttribute('maxlength', '16'); input.placeholder = 'IGN (GMS)'; input.value = prefill || '';
+        input.setAttribute('autocapitalize', 'off'); input.setAttribute('spellcheck', 'false');
+        body.appendChild(input);
+        var err = el('span', 'text-red-500 text-xs text-center'); err.hidden = true; body.appendChild(err);
+        body.appendChild(el('span', CLS.hint, metaLine(slotMeta(localData)) + (cloudEnabled() ? ' · the cloud is public: anyone with the IGN can view or overwrite it' : '')));
+        var go = function () {
+          var ign = input.value.trim();
+          if (!IGN_RE.test(ign)) { err.textContent = 'GMS IGNs only: 1–16 letters or digits'; err.hidden = false; input.focus(); return; }
+          var existing = bindingByIgn(ign);
+          if (existing && existing.key !== linkKey) {
+            close();
+            confirmDialog(ign + ' is already linked to ' + slotName(existing.key, map[existing.key]), 'Select that character instead?', 'Select it', function () { setSelected(existing.key, true); });
+            return;
+          }
+          close(); addCharacter(ign, linkKey, localData);
+        };
+        input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+        msActions(body, 'Cancel', function () { close(); }, 'Continue', go);
+        setTimeout(function () { input.focus(); input.select(); }, 30);
+      }
+    });
+  }
+  function addCharacter(ign, linkKey, localData) {
+    var sel = selectedKey();
+    var bindLocal = function (doc) {
+      var key = writeSlot(linkKey, localData, ign);
+      if (!key) return null;
+      bindSlot(key, ign, doc);
+      setSelected(key, !!linkKey && linkKey !== sel, true);   // the form already shows these inputs
+      return key;
+    };
+    if (!cloudEnabled()) {
+      confirmDialog('Save the current inputs as ' + ign + '?', 'Cloud sync is off, so this stays in this browser.', 'Save', function () { if (bindLocal(null)) toastOk('Saved ' + ign); });
+      return;
+    }
+    fetchDoc(ign, function (err, doc) {
+      if (err) {
+        confirmDialog('Cloud unavailable', 'Save ' + ign + ' locally now? It can be uploaded later from the sync icon.', 'Save locally', function () { if (bindLocal(null)) toastOk('Saved ' + ign + ' (not uploaded)'); });
+        return;
+      }
+      if (!doc) {
+        confirmDialog('Save current inputs as ' + ign + ' and upload to the cloud?', metaLine(slotMeta(localData)) + ' · anyone with the IGN can load it.', 'Save & upload', function () {
+          var key = bindLocal(null); if (!key) return;
+          uploadSlot(key, { ifMatch: false });
+        });
+        return;
+      }
+      compareDialog({
+        ign: ign, doc: doc, localData: localData, localLabel: linkKey ? slotName(linkKey, presetMap()[linkKey]) : 'current inputs',
+        localSavedAt: linkKey && presetMap()[linkKey] ? presetMap()[linkKey].savedAt : nowIso(), localSyncedAt: null,
+        onOverwriteCloud: function () { var key = bindLocal(doc); if (!key) return; cloud.bindings[key].syncedHash = null; uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); },
+        onReplaceLocal: function () { var key = bindLocal(doc); if (!key) return; if (applyCloudDoc(key, doc)) toastOk('Loaded ' + ign + ' from the cloud'); },
+        onSaveAsNew: linkKey ? null : function () {
+          var d = docPresetData(doc); if (!d) return;
+          var nk = writeSlot(null, d, ign); if (!nk) return;
+          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved ' + ign + ' from the cloud as a new preset');
+        }
+      });
+    });
+  }
+  function selectCloudOnly(ign) {
+    closePicker();
+    var existing = bindingByIgn(ign);
+    if (existing) { setSelected(existing.key, true); return; }
+    fetchDoc(ign, function (err, doc) {
+      if (err || !doc) { toastErr(err && err.offline ? 'Cloud unavailable' : 'Could not load ' + ign + ' from the cloud'); cloud.listAt = 0; return; }
+      var d = docPresetData(doc);
+      if (!d || !presetDataOk(d)) { toastErr('The cloud copy of ' + ign + ' is not a valid preset'); return; }
+      var key = writeSlot(null, d, doc.ign || ign); if (!key) return;
+      bindSlot(key, doc.ign || ign, doc);
+      setSelected(key, true, true);
+      toastOk('Loaded ' + (doc.ign || ign) + ' from the cloud');
+    });
+  }
+
+  /* -- the picker (combobox + sync icon) ------------------------------------------------- */
+  var SOFT_BASE = CLS.soft.replace(' text-text-gray-high', '');
+  var picker = { el: null, input: null, dd: null, icon: null, live: null, open: false, filter: '', active: -1, items: [], mountPoll: null };
+  var C_INPUT = 'placeholder:text-muted-gray-low outline-outline-gray-med bg-surface-gray-surface-0 flex h-8 min-w-0 rounded-[4px] px-3 py-1 text-sm outline transition-[color,box-shadow] md:text-sm focus:outline-outline-gray-high focus:shadow-[0px_0px_0px_3px_rgba(0,0,0,0.20)] w-[216px] pr-8';
+  var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[300px] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
+  var C_SECTION = 'text-text-gray-low px-2 py-1 text-[11px] font-semibold tracking-wide';
+  var C_OPT = 'msfix-opt relative flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none hover:bg-surface-gray-surface-1 text-left';
+  var C_BADGE = 'ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ';
+  var C_DIVIDER = 'border-outline-gray-med my-1 border-t';
+  var C_FOOT_BTN = 'flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1 text-xs hover:bg-surface-gray-surface-1 text-left';
+
+  function buildPicker() {
+    var wrap = el('div', 'msfix-charpicker flex items-center gap-2'); wrap.setAttribute('data-msfix-ui', '');
+    var rel = el('div', 'relative');
+    var input = el('input', C_INPUT);
+    input.type = 'text'; input.placeholder = 'Choose a character…';
+    input.setAttribute('role', 'combobox'); input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', 'msfix-charlist'); input.setAttribute('aria-haspopup', 'listbox'); input.setAttribute('aria-label', 'Character');
+    input.setAttribute('autocomplete', 'off'); input.setAttribute('spellcheck', 'false'); input.setAttribute('autocapitalize', 'off');
+    var chev = el('span', 'pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-text-gray-low'); chev.innerHTML = svgIcon('chevrons-up-down');
+    var dd = el('div', C_DD); dd.id = 'msfix-charlist'; dd.setAttribute('role', 'listbox'); dd.hidden = true;
+    rel.appendChild(input); rel.appendChild(chev); rel.appendChild(dd);
+    var icon = el('button', SOFT_BASE + ' msfix-sync text-text-gray-low'); icon.type = 'button';
+    var live = el('span', 'sr-only'); live.setAttribute('aria-live', 'polite');
+    wrap.appendChild(rel); wrap.appendChild(icon); wrap.appendChild(live);
+
+    input.addEventListener('focus', function () { openPicker(); });
+    input.addEventListener('click', function () { if (!picker.open) openPicker(); });
+    input.addEventListener('input', function () { picker.filter = input.value; picker.active = -1; if (!picker.open) openPicker(); else renderDropdown(); });
+    input.addEventListener('keydown', onPickerKey);
+    dd.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep focus in the input
+    dd.addEventListener('click', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest('[data-msfix-idx]') : null;
+      if (!t || !dd.contains(t)) return;
+      e.preventDefault(); e.stopPropagation();
+      activateItem(+t.getAttribute('data-msfix-idx'));
+    });
+    icon.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); onSyncClick(); });
+    picker.el = wrap; picker.input = input; picker.dd = dd; picker.icon = icon; picker.live = live;
+  }
+  function renderTrigger() {
+    if (!picker.input) return;
+    var key = selectedKey(), map = presetMap();
+    var name = key && map[key] ? slotName(key, map[key]) : '';
+    picker.input.setAttribute('data-msfix-selected', key || '');
+    if (picker.open) { picker.input.placeholder = name || 'Search or add a character…'; return; }
+    picker.input.value = name; picker.input.placeholder = 'Choose a character…';
+    picker.input.title = name;
+  }
+  function openPicker() {
+    if (!picker.dd || picker.open) return;
+    picker.open = true; picker.filter = ''; picker.active = -1;
+    picker.input.value = ''; picker.input.setAttribute('aria-expanded', 'true');
+    renderTrigger(); picker.dd.hidden = false; renderDropdown();
+    refreshCloudList(true);   // the cached list renders at once; a fresh one replaces it when it lands
+  }
+  function closePicker() {
+    if (!picker.dd || !picker.open) return;
+    picker.open = false; picker.filter = ''; picker.active = -1;
+    picker.dd.hidden = true; picker.input.setAttribute('aria-expanded', 'false'); picker.input.removeAttribute('aria-activedescendant');
+    renderTrigger();
+  }
+  function onPickerKey(e) {
+    var n = picker.items.length;
+    if (e.key === 'Escape') { if (picker.open) { e.preventDefault(); e.stopPropagation(); closePicker(); picker.input.blur(); } return; }
+    if (e.key === 'Tab') { closePicker(); return; }
+    if (!picker.open) { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); openPicker(); } return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(n ? (picker.active + 1) % n : -1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(n ? (picker.active - 1 + n) % n : -1); }
+    else if (e.key === 'Home') { e.preventDefault(); setActive(n ? 0 : -1); }
+    else if (e.key === 'End') { e.preventDefault(); setActive(n ? n - 1 : -1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (picker.active >= 0) activateItem(picker.active);
+      else if (n === 1) activateItem(0);
+      else if (picker.filter.trim() && IGN_RE.test(picker.filter.trim())) openAddDialog(picker.filter.trim());
+    }
+  }
+  function setActive(i) {
+    picker.active = i;
+    for (var k = 0; k < picker.items.length; k++) {
+      var it = picker.items[k]; if (!it.el) continue;
+      if (k === i) { it.el.classList.add('msfix-active'); picker.input.setAttribute('aria-activedescendant', it.el.id); if (it.el.scrollIntoView) try { it.el.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+      else it.el.classList.remove('msfix-active');
+    }
+    if (i < 0) picker.input.removeAttribute('aria-activedescendant');
+  }
+  function activateItem(i) {
+    var it = picker.items[i]; if (!it) return;
+    if (it.type === 'local') { closePicker(); picker.input.blur(); setSelected(it.key, true); }
+    else if (it.type === 'cloud') { picker.input.blur(); selectCloudOnly(it.ign); }
+    else if (it.type === 'add') { picker.input.blur(); openAddDialog(IGN_RE.test(picker.filter.trim()) ? picker.filter.trim() : ''); }
+    else if (it.type === 'retry') { cloud.listErr = false; refreshCloudList(true); }
+    else if (it.type === 'toggle-cloud') { lsSet(LS_CLOUD_ENABLED, cloudEnabled() ? 'false' : 'true'); if (cloudEnabled()) { cloud.offline = false; refreshCloudList(true); startPolling(); } else { stopPolling(); cloud.list = null; } renderDropdown(); updateIcon(); }
+    else if (it.type === 'toggle-auto') { lsSet(LS_CLOUD_AUTO, autoUploadOn() ? 'false' : 'true'); renderDropdown(); }
+    else if (it.type === 'native-load' || it.type === 'native-save') {
+      closePicker(); picker.input.blur();
+      var t = nativeTrigger(it.type === 'native-load' ? 'load' : 'save');
+      if (t) t.click(); else toastErr('The preset window is not available');
+    }
+  }
+  function badge(kind) {
+    var b = el('span', C_BADGE + (kind === 'cloud' ? 'bg-green-600 text-white' : 'bg-surface-gray-surface-2 text-text-gray-low'), kind);
+    if (kind === 'cloud') b.className += ' ml-1'; return b;
+  }
+  function optionEl(idx, main, sub, badges, selected) {
+    var d = el('div', C_OPT); d.setAttribute('role', 'option'); d.id = 'msfix-opt-' + idx; d.setAttribute('data-msfix-idx', String(idx));
+    d.setAttribute('aria-selected', selected ? 'true' : 'false');
+    var top = el('div', 'flex w-full items-center gap-2');
+    var m = el('span', 'truncate font-medium', main); m.title = main; top.appendChild(m);
+    var first = true;
+    (badges || []).forEach(function (k) { var b = badge(k); if (first) { b.className = b.className.replace(' ml-1', ''); first = false; } else b.className = b.className.replace('ml-auto ', ''); top.appendChild(b); });
+    d.appendChild(top);
+    if (sub) d.appendChild(el('span', 'text-text-gray-low w-full truncate text-xs', sub));
+    return d;
+  }
+  function renderDropdown() {
+    if (!picker.dd || !picker.open) return;
+    var dd = picker.dd; dd.innerHTML = ''; picker.items = [];
+    var q = picker.filter.trim().toLowerCase();
+    var map = presetMap(), keys = slotKeys(map), sel = selectedKey(), enabled = cloudEnabled();
+    var match = function (parts) { if (!q) return true; for (var i = 0; i < parts.length; i++) if (parts[i] && String(parts[i]).toLowerCase().indexOf(q) !== -1) return true; return false; };
+    var addItem = function (item, node) { item.el = node; picker.items.push(item); return node; };
+    var section = function (label) { var g = el('div'); g.setAttribute('role', 'group'); g.setAttribute('aria-label', label); g.appendChild(el('div', C_SECTION, label)); dd.appendChild(g); return g; };
+    var divider = function () { dd.appendChild(el('div', C_DIVIDER)); };
+    var boundIgns = {}, rows = 0;
+
+    // LOCAL — every saved slot (untouched level-0 slots are noise and stay out)
+    var locals = [];
+    keys.forEach(function (k) {
+      var s = map[k]; if (!s || !presetDataOk(s.data)) return;
+      var b = cloud.bindings[k], m = slotMeta(s.data), name = slotName(k, s);
+      if (b && b.ign) boundIgns[b.ign.toLowerCase()] = true;
+      if (!match([name, s.label, b && b.ign, m.classEn, m.classKo])) return;
+      var sub = metaLine(m) + ' · saved ' + relTime(s.savedAt);
+      if (b && b.ign && b.cloudUpdatedAt) sub += ' · cloud ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt);
+      locals.push({ k: k, name: name, sub: sub, badges: b && b.ign && b.cloudUpdatedAt ? ['local', 'cloud'] : ['local'], selected: k === sel });
+    });
+    if (locals.length) {
+      var g = section('LOCAL');
+      locals.forEach(function (l) { g.appendChild(addItem({ type: 'local', key: l.k }, optionEl(picker.items.length, l.name, l.sub, l.badges, l.selected))); rows++; });
+    }
+    // CLOUD — characters not already linked locally (linked ones are merged into their LOCAL row)
+    if (enabled) {
+      var g2 = section('CLOUD'), shown = 0, hidden = 0;
+      if (cloud.list) {
+        for (var i = 0; i < cloud.list.length; i++) {
+          var c = cloud.list[i]; if (boundIgns[c.ign.toLowerCase()]) continue;
+          var cm = docMeta(c);
+          if (!match([c.ign, c.label, cm.classEn, cm.classKo])) continue;
+          if (q.length < 2 && shown >= 10) { hidden++; continue; }
+          g2.appendChild(addItem({ type: 'cloud', ign: c.ign }, optionEl(picker.items.length, c.ign + (c.label && !eqi(c.label, c.ign) ? ' · ' + c.label : ''), metaLine(cm) + ' · updated ' + relTime(c.updatedAt), ['cloud'], false)));
+          shown++; rows++;
+        }
+      }
+      if (cloud.listBusy && !cloud.list) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'Loading…'));
+      else if (cloud.listErr || (cloud.offline && !cloud.list)) g2.appendChild(addItem({ type: 'retry' }, optionEl(picker.items.length, 'Cloud unavailable — retry', '', [], false)));
+      else if (!shown) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', q ? 'No cloud characters match' : 'No other characters in the cloud'));
+      if (hidden) g2.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', hidden + ' more — type 2+ letters to search'));
+    }
+    if (!rows && q && !enabled) dd.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'No matches'));
+    if (!locals.length && !q) dd.insertBefore(el('div', 'text-text-gray-low px-2 py-1 text-xs', 'No saved characters yet'), dd.firstChild);
+    if (rows || enabled) divider();
+    var addRow = optionEl(picker.items.length, '+ Add character', q && IGN_RE.test(picker.filter.trim()) ? 'Save the current inputs as ' + picker.filter.trim() : 'Save the current inputs under an IGN', [], false);
+    dd.appendChild(addItem({ type: 'add' }, addRow));
+
+    // footer: toggles, the native windows, and the public-cloud reminder
+    divider();
+    var foot = el('div', 'flex flex-col gap-0.5 px-1 pb-1');
+    var toggle = function (type, label, on) {
+      var b = el('button', C_FOOT_BTN); b.type = 'button'; b.setAttribute('data-msfix-idx', String(picker.items.length)); b.setAttribute('data-msfix-toggle', type);
+      b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', on ? 'true' : 'false'); b.id = 'msfix-opt-' + picker.items.length;
+      b.appendChild(el('span', '', label));
+      b.appendChild(el('span', 'font-semibold ' + (on ? 'text-green-600' : 'text-text-gray-low'), on ? 'on' : 'off'));
+      foot.appendChild(addItem({ type: type }, b));
+    };
+    toggle('toggle-cloud', 'Cloud sync', enabled);
+    if (enabled) toggle('toggle-auto', 'Auto-upload changes', autoUploadOn());
+    var manage = el('div', 'flex items-center gap-1 px-1 pt-1');
+    manage.appendChild(el('span', 'text-text-gray-low text-xs', 'Presets:'));
+    [['native-load', 'Load window'], ['native-save', 'Save window']].forEach(function (p) {
+      var b = el('button', 'cursor-pointer rounded-sm px-1.5 py-0.5 text-xs underline hover:bg-surface-gray-surface-1', p[1]); b.type = 'button';
+      b.id = 'msfix-opt-' + picker.items.length; b.setAttribute('data-msfix-idx', String(picker.items.length));
+      manage.appendChild(addItem({ type: p[0] }, b));
+    });
+    foot.appendChild(manage);
+    if (enabled) foot.appendChild(el('span', 'text-text-gray-low px-1 text-[10px]', 'Cloud is public: anyone can view or overwrite an IGN.'));
+    dd.appendChild(foot);
+    setActive(picker.active >= 0 && picker.active < picker.items.length ? picker.active : -1);
+  }
+
+  function unmountPicker() {
+    closePicker(); stopPolling();
+    if (picker.el && picker.el.parentNode) picker.el.parentNode.removeChild(picker.el);
+  }
+  // Idempotent: mounts once the native row exists and both stores are known; re-run after
+  // every panel remount (loadDraft & co.), from the housekeeping interval and on navigation.
+  function ensureCharPicker() {
+    applyRouteGate();
+    if (!isInputRoute()) { if (picker.el && picker.el.parentNode) unmountPicker(); return false; }
+    var row = nativePresetRow(); if (!row) return false;
+    var header = row.parentElement; if (!header) return false;
+    if (!ensureSubscriptions()) return false;
+    if (picker.el && header.contains(picker.el)) return true;
+    if (!picker.el) buildPicker();
+    else if (picker.el.parentNode) picker.el.parentNode.removeChild(picker.el);
+    header.appendChild(picker.el);
+    reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+    startPolling();
+    return true;
+  }
+  function schedulePickerMount() {
+    if (picker.mountPoll) clearInterval(picker.mountPoll);
+    var tries = 0;
+    picker.mountPoll = setInterval(function () {
+      if (++tries > 200 || !isInputRoute() || ensureCharPicker()) { clearInterval(picker.mountPoll); picker.mountPoll = null; }
+    }, 150);
+  }
+
+  /* -- export enrichment: the site's Save-as-JSON file gets "ign" for a linked slot -------- */
+  // The site builds the file synchronously (Blob → object URL → detached <a>.click() → revoke).
+  // Shadow click on <a> only, keep the Blob while its URL is alive, read it asynchronously,
+  // add "ign" from the slot in the filename, and click the original with a fresh URL. The
+  // site's importer ignores unknown top-level keys, so the file stays importable there too.
+  function installExportEnricher() {
+    if (window.__msfixExportHook) return; window.__msfixExportHook = true;
+    var blobs = {}, order = [];
+    var oCreate = URL.createObjectURL, oRevoke = URL.revokeObjectURL;
+    if (typeof oCreate !== 'function' || typeof oRevoke !== 'function' || typeof HTMLAnchorElement === 'undefined') return;
+    URL.createObjectURL = function (o) {
+      var u = oCreate.apply(URL, arguments);
+      try { if (o instanceof Blob) { blobs[u] = o; order.push(u); while (order.length > 20) delete blobs[order.shift()]; } } catch (e) {}
+      return u;
+    };
+    URL.revokeObjectURL = function (u) { try { delete blobs[u]; } catch (e) {} return oRevoke.apply(URL, arguments); };
+    var oClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      var a = this, args = arguments;
+      var m = /^scouter-preset-(\d+)/.exec(a.getAttribute('download') || '');
+      var blob = m ? blobs[a.href] : null;             // must be read now — revoked right after we return
+      var ign = m ? ignForSlot(m[1]) : null;
+      if (!blob || !ign) return oClick.apply(a, args);
+      blob.text().then(function (txt) {
+        var o = null; try { o = JSON.parse(txt); } catch (e) {}
+        if (!o || o.type !== 'maplescouter-manual-preset') return oClick.apply(a, args);
+        o.ign = ign;
+        var nu = oCreate.call(URL, new Blob([JSON.stringify(o)], { type: 'application/json' }));
+        a.href = nu; oClick.apply(a, args);
+        setTimeout(function () { try { oRevoke.call(URL, nu); } catch (e) {} }, 60000);
+      }, function () { oClick.apply(a, args); });
+    };
+  }
+
+  function cloudOnReady() {
+    injectCloudCss();
+    applyRouteGate();
+    schedulePickerMount();
+    var onFocus = function () { if (!document.hidden) { cloud.pollDelay = POLL_MS; pollTick(true); } };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('storage', function (e) {
+      if (!e || (e.key !== LS_CLOUD_SLOTS && e.key !== LS_CLOUD_SELECTED && e.key !== LS_CLOUD_ENABLED && e.key !== LS_CLOUD_AUTO)) return;
+      loadBindings(); if (cloud.subscribed) reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+    });
+    document.addEventListener('mousedown', function (e) {
+      if (picker.open && picker.el && !picker.el.contains(e.target)) closePicker();
+    }, true);
+  }
+
   /* ---------------- 5. UI polish CSS ---------------------------------------------------- */
 
   function injectCss() {
@@ -1253,6 +2306,9 @@
   if (restoreLocale()) return; // redirecting; nothing else to do on this load
   restoreRegion();
   hookWebpack();
+  loadBindings();            // cloud character bindings (needed by the export hook below)
+  installExportEnricher();   // Save-as-JSON files of linked presets carry "ign"
+  applyRouteGate();          // hide native Load/Save + IGN search on /input only
 
   // Track SPA navigations for locale saving + fresh sweeps.
   var origPush = history.pushState;
@@ -1272,6 +2328,8 @@
   function onNavigate() {
     saveLocale();
     backupRegion();
+    applyRouteGate();
+    schedulePickerMount();
     if (document.body && pathLocale() === 'en') {
       setTimeout(function () { processTree(document.body); }, 50);
     }
@@ -1280,6 +2338,7 @@
   function onReady() {
     injectCss();
     installPresetImportBridge(); // let the site's native import accept our old export files
+    cloudOnReady();              // character picker + cloud sync (Manual Input page)
     // The Save window mounts on click, so look for it right after one rather than waiting
     // for the housekeeping interval below.
     document.addEventListener('click', function () {
@@ -1289,7 +2348,7 @@
     // Delay the DOM layer slightly so React hydration finishes first.
     setTimeout(startDomLayer, 250);
     setTimeout(function () { translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); }, 400);
-    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); ensureSaveImportIcons(); refreshFloatRects(); }, 2000);
+    setInterval(function () { backupRegion(); translateTitle(); fixLogo(); killAdPopups(); hideKoreanChangelog(); hideFavoritesBar(); compactCheckboxRows(); ensureSaveImportIcons(); refreshFloatRects(); ensureCharPicker(); }, 2000);
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') onReady();
