@@ -13,8 +13,8 @@ Everything is pre-built — you only need the developer account and the upload c
 3. Store listing (copy/paste below), category **Fun** or **Productivity → Tools**, language English.
 4. Privacy tab:
    - Single purpose: "Translates maplescouter.com into English, remembers site preferences, and adds a character picker with optional cloud sync of the user's stat presets."
-   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the stat presets of the Character pagel Input page."
-   - Data usage: the only data transmitted is a stat preset the user explicitly uploads to scouter.tomerh2001.com — declare "user activity / website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
+   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the character presets of the site's Character page. The only network requests go to scouter.tomerh2001.com, and only when the user loads or uploads a character by IGN."
+   - Data usage: the only data transmitted is a stat preset the user explicitly uploads to scouter.tomerh2001.com — declare "Website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
 5. Submit for review. First review usually takes a few hours to a couple of days.
 6. For updates: bump the userscript @version, rebuild, upload the new zip to the existing item.
 
