@@ -26,9 +26,7 @@ async function scenario(name, fn) {
 }
 // in-page helpers (ES5, evaluated in the page)
 const H = {
-  stores: `(function(){ var wp=null; try{ self.webpackChunk_N_E.push([[Symbol('e2e')],{},function(r){wp=r;}]); }catch(e){} if(!wp) return null; var ps=null, ms=null;
-    for (var id in wp.m){ var ex; try{ ex=wp(id);}catch(e){continue;} if(!ex||(typeof ex!=='object'&&typeof ex!=='function')) continue; var ns=Object.keys(ex); for(var i=0;i<ns.length;i++){ var v=ex[ns[i]]; if(!v||typeof v.getState!=='function') continue; try{ var st=v.getState(); if(st&&st.preset&&typeof st.setPreset==='function') ps=v; if(st&&('draftStat' in st)&&typeof st.loadDraft==='function') ms=v; }catch(e){} } if(ps&&ms) break; }
-    window.__e2e={ps:ps,ms:ms}; return !!(ps&&ms); })()`,
+  stores: `(function(){ var d=window.__msfixDebug; var ps=d&&d.presetStore, ms=d&&d.manualStore; window.__e2e={ps:ps,ms:ms}; return !!(ps&&ms); })()`,
   slots: `(function(){ var m=window.__e2e.ps.getState().preset||{}; var o={}; for(var k in m) o[k]={label:m[k].label, level:m[k].data&&m[k].data.stat&&m[k].data.stat.level, cls:m[k].data&&m[k].data.stat&&m[k].data.stat.myClass, savedAt:m[k].savedAt}; return o; })()`,
   bindings: `(function(){ try { return { slots: JSON.parse(localStorage.getItem('msfix:cloud:slots')||'{}'), selected: JSON.parse(localStorage.getItem('msfix:cloud:selected')||'null') }; } catch(e){ return null; } })()`,
   icon: `(function(){ var b=document.querySelector('.msfix-charpicker .msfix-sync'); return b? b.getAttribute('data-msfix-sync') : null; })()`,
@@ -67,11 +65,11 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
   cdp = await page.createCDPSession();
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, eventsEnabled: true });
   const dlEvents = []; cdp.on('Browser.downloadWillBegin', e => dlEvents.push(e.suggestedFilename)); cdp.on('Browser.downloadProgress', e => { if (e.state !== 'inProgress') dlEvents.push(e.state); });
-  await page.evaluateOnNewDocument((cloud) => { try { localStorage.setItem('msfix:locale', 'en'); localStorage.setItem('region', JSON.stringify({ state: { region: 'gms' }, version: 0 })); localStorage.setItem('msfix:cloud:url', cloud); } catch (e) {} }, CLOUD);
+  await page.evaluateOnNewDocument((cloud) => { try { localStorage.setItem('msfix:locale', 'en'); localStorage.setItem('msfix:debug', '1'); localStorage.setItem('region', JSON.stringify({ state: { region: 'gms' }, version: 0 })); localStorage.setItem('msfix:cloud:url', cloud); } catch (e) {} }, CLOUD);
 
   await page.goto('http://localhost:8787/en/input', { waitUntil: 'networkidle2', timeout: 90000 });
   await waitFor(() => !!document.querySelector('.msfix-charpicker'), 30000, 'picker mounted');
-  await page.evaluate(H.stores);
+  await waitFor(H.stores, 10000, 'stores');
   let base = await page.evaluate(() => window.__e2e.ms.getState().draftStat);
 
   await scenario('A. picker renders; native Load/Save row + IGN search hidden on /en/input', async () => {
@@ -97,7 +95,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     const anyVisible = away.ignBlocks.some(d => d !== 'none'); if (!anyVisible) throw new Error('IGN search still hidden off /input ' + JSON.stringify(away));
     await page.evaluate(() => { var a = Array.prototype.find.call(document.querySelectorAll('a[href]'), function (x) { return /^\/en\/input\/?$/.test(x.getAttribute('href') || '') && x.offsetParent; }); if (!a) throw new Error('no input link'); a.click(); });
     await waitFor(() => location.pathname.indexOf('/en/input') === 0 && !!document.querySelector('.msfix-charpicker'), 20000, 'back on /input with picker');
-    await page.evaluate(H.stores);
+    await waitFor(H.stores, 10000, 'stores');
     return { away, back: true };
   });
 
@@ -258,7 +256,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
   await scenario('K. reload keeps selection + bindings; native Reset deselects instead of overwriting the slot', async () => {
     await page.reload({ waitUntil: 'networkidle2', timeout: 90000 });
     await waitFor(() => !!document.querySelector('.msfix-charpicker'), 30000, 'picker after reload');
-    await page.evaluate(H.stores);
+    await waitFor(H.stores, 10000, 'stores');
     const trig = await page.evaluate(H.trigger); if (trig.value !== 'HTomer') throw new Error('selection lost: ' + JSON.stringify(trig));
     await waitFor(() => ['synced', 'local-ahead', 'cloud-ahead', 'conflict'].indexOf(document.querySelector('.msfix-sync').getAttribute('data-msfix-sync')) !== -1, 8000, 'icon state after reload');
     const iconBefore = await page.evaluate(H.icon);

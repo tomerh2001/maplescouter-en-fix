@@ -125,6 +125,11 @@
 
   /* -- site stores, captured passively as webpack executes each module (no forced requires) */
   var siteRefs = { manualStore: null, presetStore: null, toast: null, enBundle: null, defaultUserStat: null };
+  // Test hook: with localStorage msfix:debug=1 the discovered refs are mirrored on window so an
+  // end-to-end harness can drive the same stores we use, instead of force-requiring site modules.
+  var DEBUG_REFS = false;
+  try { DEBUG_REFS = localStorage.getItem('msfix:debug') === '1'; } catch (e) {}
+  if (DEBUG_REFS) window.__msfixDebug = siteRefs;
   function looksLikeUserStat(v) {
     return !!(v && typeof v === 'object' && v.stat && v.hexa && v.huntSkill && v.seedRing &&
       typeof v.isGMS === 'boolean' && typeof v.stat.myClass === 'string');
