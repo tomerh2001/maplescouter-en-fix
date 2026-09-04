@@ -1,5 +1,6 @@
-// End-to-end test of the character picker + cloud sync (v1.5.0) against the live site through the
-// local proxy (node test/proxy.js → :8787) and a local backend on :8080 (maplescouter-cloud or the stub).
+// End-to-end test of the character picker + cloud sync (v1.7.0) against the live site through the
+// local proxy (node test/proxy.js → :8787) and a local backend on :8080 (the stub: it serves
+// /v1/avatar/:ign for IGNs starting with e2e/htomer and counts those lookups at /__avatar-count).
 // Run from work/:  node e2e-cloud.js [download-dir]
 const puppeteer = require('puppeteer'); const fs = require('fs'); const path = require('path'); const http = require('http');
 const DL = process.argv[2] || path.join(__dirname, 'out', 'e2e-dl');
@@ -41,6 +42,15 @@ async function openPicker() {
   await waitFor(() => { var d = document.querySelector('.msfix-charpicker .msfix-dd'); return d && !d.hidden; }, 3000, 'dropdown open');
   await wait(300);
 }
+// Real mouse click on the sync icon. Site toasts stack over the header for a few seconds and would take the
+// click instead, and they stay for as long as the mouse rests on them, so park the mouse away from the header,
+// wait until the point under the icon's centre is the icon itself, click, and park the mouse again.
+async function clickSync() {
+  await page.mouse.move(5, 5);
+  await waitFor(() => { var b = document.querySelector('.msfix-charpicker .msfix-sync'); if (!b) return false; var r = b.getBoundingClientRect(); var e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && (e === b || b.contains(e)); }, 8000, 'sync icon uncovered');
+  await page.click('.msfix-charpicker .msfix-sync');
+  await page.mouse.move(5, 5);
+}
 async function dropdownText() { return page.evaluate(() => (document.querySelector('.msfix-charpicker .msfix-dd').innerText || '').replace(/\s+/g, ' ')); }
 async function clickOption(text) {
   const ok = await page.evaluate((text) => { var rows = document.querySelectorAll('.msfix-charpicker .msfix-dd [data-msfix-idx]'); for (var i = 0; i < rows.length; i++) if ((rows[i].textContent || '').indexOf(text) !== -1) { rows[i].click(); return rows[i].textContent; } return null; }, text);
@@ -54,6 +64,18 @@ async function clickDialogButton(text) {
   if (!ok) throw new Error('dialog button not found: ' + text + ' in: ' + (await dialogText()));
 }
 async function typeInDialog(text) { await page.type('.msfix-dialog input', text); }
+// The delete dialog offers [Cancel] [Delete local] [Delete cloud] [Delete both] for a character with a cloud copy and [Cancel] [Delete] otherwise.
+async function clickDeleteLocal() {
+  await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+  const ok = await page.evaluate(() => { var d = document.querySelectorAll('.msfix-dialog'); var bs = Array.from(d[d.length - 1].querySelectorAll('button')); var b = bs.find(x => x.textContent.trim() === 'Delete local') || bs.find(x => x.textContent.trim() === 'Delete'); if (!b) return null; b.click(); return b.textContent.trim(); });
+  if (!ok) throw new Error('no local delete button in: ' + (await dialogText()));
+  return ok;
+}
+// Avatar lookups seen by the stub, per lowercase IGN (the traffic budget assertions).
+async function avatarCounts() { const r = await cloudReq('GET', '/__avatar-count'); if (r.status !== 200 || !r.json) throw new Error('/__avatar-count ' + r.status); return r.json.counts || {}; }
+async function resetAvatarCounts() { const r = await cloudReq('GET', '/__reset-avatar-count'); if (r.status !== 200) throw new Error('/__reset-avatar-count ' + r.status); }
+// Labelled buttons of the front-most dialog, in on-screen order. The icon-only corner X (no text) is skipped.
+function delBtns() { return page.evaluate(() => { var d = document.querySelectorAll('.msfix-dialog'); return Array.from(d[d.length - 1].querySelectorAll('button')).map(b => b.textContent.trim()).filter(t => t !== ''); }); }
 function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(base)); d.stat.level = String(level); d.stat.myClass = cls; return { preset: { type: 'maplescouter-manual-preset', v: 1, savedAt: new Date().toISOString(), label: ign, data: d }, label: ign }; }
 
 (async () => {
@@ -108,12 +130,12 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
     await typeInDialog('HTomer');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HTomer\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
     const confirmText = await dialogText();
     await clickDialogButton('Add');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'icon not-uploaded (local first)');
     if ((await cloudReq('GET', '/v1/characters/htomer')).status !== 404) throw new Error('added character was uploaded automatically');
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload to the cloud\?/.test(d.innerText); }, 4000, 'upload prompt');
     await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'icon synced');
@@ -137,7 +159,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
   });
 
   await scenario('C2. icon click → upload confirm → synced; cloud has 276', async () => {
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after upload');
     const doc = await cloudReq('GET', '/v1/characters/htomer'); if (doc.json.preset.data.stat.level !== '276') throw new Error('cloud level ' + doc.json.preset.data.stat.level);
@@ -204,6 +226,59 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { lenAfterSwitch: '252', htomer: slots[ht].level };
   });
 
+  await scenario('AV. avatars: opening the dropdown looks up a linked row once (cached after), the row and the closed trigger show the picture, an unlinked row shows the silhouette', async () => {
+    // D3 left Len selected; the closed trigger shows the look of the selected character, so pick HTomer
+    await openPicker(); await clickOption('HTomer');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HTomer'; }, 8000, 'HTomer selected');
+    await wait(300);
+    // start from an empty look cache so the dropdown open is the one thing that triggers the lookup
+    await page.evaluate(() => localStorage.removeItem('msfix:cloud:avatars'));
+    await resetAvatarCounts();
+    await openPicker();
+    await waitFor(() => { var b = document.querySelector('.msfix-charpicker .msfix-dd .msfix-avatar[data-msfix-avatar="htomer"]'); var i = b && b.querySelector('img'); return !!(i && b.getAttribute('data-msfix-avatar-state') === 'ok' && /\/avatar\.png/.test(i.getAttribute('src') || '')); }, 6000, 'HTomer row painted in place');
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('.msfix-charpicker .msfix-dd [role=option]')).map(r => { var b = r.querySelector('.msfix-avatar'); var i = b && b.querySelector('img'); return { text: r.textContent.replace(/\s+/g, ' ').trim().slice(0, 30), box: !!b, first: !!b && b === r.firstElementChild, w: b ? b.getBoundingClientRect().width : 0, state: b && b.getAttribute('data-msfix-avatar-state'), svg: !!(b && b.querySelector('svg')), img: i ? { src: i.getAttribute('src'), alt: i.getAttribute('alt'), lazy: i.getAttribute('loading'), ref: i.getAttribute('referrerpolicy'), drag: i.getAttribute('draggable') } : null }; }));
+    const ht = rows.find(r => /HTomer/.test(r.text)), len = rows.find(r => /Len/.test(r.text));
+    if (!ht || !ht.box || !ht.first || ht.state !== 'ok' || !ht.img) throw new Error('HTomer row avatar: ' + JSON.stringify(ht));
+    if (ht.img.alt !== '' || ht.img.lazy !== 'lazy' || ht.img.ref !== 'no-referrer' || ht.img.drag !== 'false') throw new Error('img attributes: ' + JSON.stringify(ht.img));
+    if (Math.round(ht.w) !== 28) throw new Error('avatar box width ' + ht.w);
+    if (!len || !len.box || len.state !== 'none' || !len.svg || len.img) throw new Error('unlinked row should show the silhouette: ' + JSON.stringify(len));
+    let counts = await avatarCounts();
+    if (counts.htomer !== 1) throw new Error('one lookup expected for htomer on open: ' + JSON.stringify(counts));
+    if (Object.keys(counts).length !== 1) throw new Error('lookups for unlinked rows: ' + JSON.stringify(counts));
+    await page.keyboard.press('Escape');
+    await waitFor(() => { var a = document.querySelector('.msfix-charpicker .msfix-avatar-trigger'); var i = a && a.querySelector('img'); return !!(a && !a.hidden && i && /\/avatar\.png/.test(i.getAttribute('src') || '')); }, 4000, 'trigger shows the selected look');
+    const trig = await page.evaluate(() => { var a = document.querySelector('.msfix-charpicker .msfix-avatar-trigger'); var i = document.querySelector('.msfix-charpicker input[role=combobox]'); var ar = a.getBoundingClientRect(), ir = i.getBoundingClientRect(); return { w: ar.width, left: ar.left - ir.left, hasClass: i.classList.contains('msfix-has-avatar'), ign: a.getAttribute('data-msfix-avatar') }; });
+    if (Math.round(trig.w) !== 20 || trig.left < 0 || trig.left > 20 || !trig.hasClass || trig.ign !== 'htomer') throw new Error('trigger avatar: ' + JSON.stringify(trig));
+    // a second open reuses the cache: no new lookup, the row is painted from the start
+    await openPicker();
+    const state2 = await page.evaluate(() => { var b = document.querySelector('.msfix-charpicker .msfix-dd .msfix-avatar[data-msfix-avatar="htomer"]'); return b && b.getAttribute('data-msfix-avatar-state'); });
+    await page.keyboard.press('Escape'); await wait(300);
+    counts = await avatarCounts();
+    if (counts.htomer !== 1 || state2 !== 'ok') throw new Error('second open: ' + JSON.stringify({ counts, state2 }));
+    const cached = await page.evaluate(() => JSON.parse(localStorage.getItem('msfix:cloud:avatars') || '{}'));
+    if (!cached.htomer || !cached.htomer.image || cached.htomer.level !== 291 || cached.htomer.job !== 'Shade' || !cached.htomer.at) throw new Error('cache entry: ' + JSON.stringify(cached));
+    return { rows: rows.map(r => r.text + ':' + r.state), counts, trigger: trig, cached: cached.htomer };
+  });
+
+  await scenario('AV2. traffic budget: polling, focus, autosave and a re-render never look up a character look', async () => {
+    await page.evaluate(() => localStorage.removeItem('msfix:cloud:avatars'));   // nothing cached, so any lookup would go to the stub
+    await resetAvatarCounts();
+    const reqs0 = cloudRequests.filter(r => /\/v1\/avatar\//.test(r)).length;
+    await page.evaluate(() => window.__msfixDebug.pollNow());
+    await wait(800);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await wait(800);
+    await setDraft({ level: '276' });   // same value: the autosave path runs, the icon stays as it is
+    await wait(1200);
+    const counts = await avatarCounts();
+    const reqs1 = cloudRequests.filter(r => /\/v1\/avatar\//.test(r)).length;
+    if (Object.keys(counts).length || reqs1 !== reqs0) throw new Error('avatar lookups outside the dropdown/add flows: ' + JSON.stringify({ counts, reqs: reqs1 - reqs0 }));
+    const trig = await page.evaluate(() => { var a = document.querySelector('.msfix-charpicker .msfix-avatar-trigger'); return a ? a.hidden : null; });
+    // the closed trigger only shows a cached look and never fetches one
+    if (await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('msfix:cloud:avatars') || '{}')).length)) throw new Error('cache repopulated without a dropdown open');
+    return { counts, triggerHidden: trig, icon: await page.evaluate(H.icon) };
+  });
+
   await scenario('E. typing an IGN offers "Load <IGN> from the cloud"; selecting it imports and loads it (no directory listing)', async () => {
     const put = await cloudReq('PUT', '/v1/characters/CloudGuy', makeDoc('CloudGuy', 260, '나이트로드', base));
     if (put.status !== 201 && put.status !== 200) throw new Error('seed PUT ' + put.status);
@@ -223,23 +298,84 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { key, listRequests: listReqsAfter };
   });
 
-  await scenario('F. comparison dialog when adding an IGN that exists in the cloud; "Replace local" loads the cloud version', async () => {
-    await cloudReq('PUT', '/v1/characters/Existing', makeDoc('Existing', 230, '아란', base));
+  await scenario('F. adding an IGN that is already in the cloud asks one question; "Load from cloud" loads the cloud copy (synced)', async () => {
+    const seed = await cloudReq('PUT', '/v1/characters/Existing', makeDoc('Existing', 230, '아란', base));
+    if (seed.status !== 201 && seed.status !== 200) throw new Error('seed PUT ' + seed.status);
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/existing$/i.test(r)).length;
     await openPicker();
     await clickOption('+ Add character');
     await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
     await typeInDialog('Existing');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /already exists in the cloud/.test(d.innerText); }, 8000, 'comparison dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Already in the cloud/.test(d.innerText); }, 8000, 'cloud question dialog');
     const txt = await dialogText();
     await page.screenshot({ path: path.join(DL, 'shot-compare.png') });
-    for (const need of ['Your inputs', 'Cloud copy', 'Upload my inputs', 'Use cloud copy', 'differ']) if (txt.indexOf(need) === -1) throw new Error('missing "' + need + '" in: ' + txt);
-    await clickDialogButton('Use cloud copy');
+    for (const need of ['Already in the cloud', 'Lv 230', 'Aran', 'updated', 'Load the cloud copy, or keep the inputs on the page?']) if (txt.indexOf(need) === -1) throw new Error('missing "' + need + '" in: ' + txt);
+    for (const gone of ['Your inputs', 'Cloud copy', 'Upload my inputs', 'Use cloud copy', 'Keep both', 'differ']) if (txt.indexOf(gone) !== -1) throw new Error('old wording "' + gone + '" in: ' + txt);
+    const btns = await delBtns();
+    if (btns.join('|') !== 'Cancel|Keep my inputs|Load from cloud') throw new Error('buttons: ' + JSON.stringify(btns));
+    await clickDialogButton('Load from cloud');
     await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '230') && /Aran/.test(document.body.innerText), 10000, 'form shows Existing');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced');
+    await waitFor(() => /Loaded from the cloud/.test(document.body.innerText), 4000, 'toast');
     const slots = await page.evaluate(H.slots); const key = Object.keys(slots).find(k => slots[k].label === 'Existing');
-    if (!key) throw new Error('no Existing slot ' + JSON.stringify(slots));
-    return { key, dialog: txt.slice(0, 260) };
+    if (!key || slots[key].level !== '230') throw new Error('no Existing slot at 230 ' + JSON.stringify(slots));
+    const b = await page.evaluate(H.bindings);
+    if (!b.slots[key] || b.slots[key].ign !== 'Existing' || b.slots[key].cloudUpdatedAt !== seed.json.updatedAt || !b.selected || b.selected.key !== key) throw new Error('binding ' + JSON.stringify(b));
+    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/existing$/i.test(r)).length !== putsBefore) throw new Error('Load from cloud uploaded');
+    return { key, dialog: txt.slice(0, 260), buttons: btns };
+  });
+
+  await scenario('F2. "Keep my inputs": the character is saved and linked from the page inputs, not uploaded (local-ahead), the cloud copy is untouched', async () => {
+    // the form shows Existing (230 Aran); the cloud copy of Existing2 differs by level
+    const seed = await cloudReq('PUT', '/v1/characters/Existing2', makeDoc('Existing2', 231, '아란', base));
+    if (seed.status !== 201 && seed.status !== 200) throw new Error('seed PUT ' + seed.status);
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/existing2$/i.test(r)).length;
+    await openPicker();
+    await clickOption('+ Add character');
+    await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
+    await typeInDialog('Existing2');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Already in the cloud/.test(d.innerText); }, 8000, 'cloud question dialog');
+    const txt = await dialogText();
+    if (txt.indexOf('Lv 231') === -1) throw new Error('subtitle lacks the cloud meta: ' + txt);
+    await clickDialogButton('Keep my inputs');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Existing2'; }, 8000, 'Existing2 selected');
+    await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 8000, 'icon local-ahead');
+    await waitFor(() => /Saved here\. Click the sync icon to upload\./.test(document.body.innerText), 4000, 'toast');
+    await wait(1200);
+    const slots = await page.evaluate(H.slots); const key = Object.keys(slots).find(k => slots[k].label === 'Existing2');
+    if (!key || slots[key].level !== '230') throw new Error('slot not from the page inputs: ' + JSON.stringify(slots[key]));
+    if (Array.from(Object.values(slots)).filter(s => s.label === 'Existing2').length !== 1) throw new Error('duplicate Existing2 slots');
+    const b = await page.evaluate(H.bindings);
+    if (!b.slots[key] || b.slots[key].ign !== 'Existing2' || b.slots[key].cloudUpdatedAt !== seed.json.updatedAt || b.slots[key].syncedHash) throw new Error('binding ' + JSON.stringify(b.slots[key]));
+    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/existing2$/i.test(r)).length !== putsBefore) throw new Error('Keep my inputs uploaded');
+    const doc = await cloudReq('GET', '/v1/characters/existing2');
+    if (doc.status !== 200 || doc.json.preset.data.stat.level !== '231' || doc.json.updatedAt !== seed.json.updatedAt) throw new Error('cloud copy changed: ' + JSON.stringify({ status: doc.status, level: doc.json && doc.json.preset.data.stat.level, updatedAt: doc.json && doc.json.updatedAt }));
+    // the icon's tooltip says what to do next
+    await page.hover('.msfix-charpicker .msfix-sync'); await wait(300);
+    const tip = await page.evaluate(() => { const t = document.querySelector('.msfix-tip'); return t ? t.textContent : ''; });
+    await page.mouse.move(5, 5); await wait(200);
+    if (!/Edited since the last upload\. Click to upload\./.test(tip)) throw new Error('tooltip: ' + tip);
+    // the sync icon now offers the plain upload dialog
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload changes to the cloud\?/.test(d.innerText); }, 4000, 'upload dialog');
+    await clickDialogButton('Cancel');
+    await wait(200);
+    // cleanup: drop the local slot and the seeded cloud copy; go back to Existing
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /Existing2/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
+    const dbtns = await delBtns();
+    if (dbtns.join('|') !== 'Cancel|Delete local|Delete cloud|Delete both') throw new Error('delete buttons for a linked character with a cloud copy: ' + JSON.stringify(dbtns));
+    await clickDialogButton('Delete local');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
+    const del = await cloudReq('DELETE', '/v1/characters/existing2', null, { 'X-Confirm': 'existing2' });
+    if (del.status !== 204) throw new Error('cleanup DELETE ' + del.status);
+    await openPicker(); await clickOption('Existing');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'Existing'; }, 8000, 'Existing selected again');
+    return { key, level: slots[key].level, cloudLevel: doc.json.preset.data.stat.level, tip: tip.slice(0, 80), deleteButtons: dbtns };
   });
 
   await scenario('G. export download of a bound slot contains "ign"', async () => {
@@ -274,19 +410,31 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { file: f, ign: o.ign, level: o.data.stat.level };
   });
 
-  await scenario('H. cloud changed elsewhere → focus poll flags cloud-ahead → compare → overwrite cloud (If-Match) → synced', async () => {
+  await scenario('H. cloud changed elsewhere → poll flags cloud-ahead → "The cloud copy is newer" → Upload mine (If-Match) → synced', async () => {
     const put = await cloudReq('PUT', '/v1/characters/HTomer', makeDoc('HTomer', 299, '은월', base));
     if (put.status !== 200) throw new Error('external PUT ' + put.status);
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    // focus polls run at most once a minute and AV2 used one; pollNow runs the same pollTick(true) the focus handler calls
+    await page.evaluate(() => window.__msfixDebug.pollNow());
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    await page.hover('.msfix-charpicker .msfix-sync'); await wait(300);
+    const tip = await page.evaluate(() => { const t = document.querySelector('.msfix-tip'); return t ? t.textContent : ''; });
+    await page.mouse.move(5, 5); await wait(200);
+    if (!/The cloud copy is newer\. Click to choose\./.test(tip)) throw new Error('cloud-ahead tooltip: ' + tip);
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /The cloud copy is newer/.test(d.innerText); }, 8000, 'choice dialog');
     const txt = await dialogText();
-    await clickDialogButton('Upload my inputs');
+    for (const need of ['Lv 299', 'updated', 'Yours:', 'edited', 'Show differences', 'Load the cloud copy, or upload yours?']) if (txt.indexOf(need) === -1) throw new Error('missing "' + need + '" in: ' + txt);
+    for (const gone of ['Your inputs', 'Cloud copy', 'Upload my inputs', 'Use cloud copy', 'Keep both', 'differs from the cloud']) if (txt.indexOf(gone) !== -1) throw new Error('old wording "' + gone + '" in: ' + txt);
+    const btns = await delBtns();
+    if (btns.join('|') !== 'Cancel|Load cloud copy|Upload mine') throw new Error('buttons: ' + JSON.stringify(btns));
+    // the field list is hidden until asked for
+    const diffHidden = await page.evaluate(() => !/Level: yours 276, cloud 299/.test(document.querySelector('.msfix-dialog').innerText));
+    if (!diffHidden) throw new Error('diff list shown by default: ' + txt);
+    await clickDialogButton('Upload mine');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced');
     const doc = await cloudReq('GET', '/v1/characters/htomer');
     if (doc.json.preset.data.stat.level !== '276') throw new Error('cloud level after overwrite ' + doc.json.preset.data.stat.level);
-    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level };
+    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level, buttons: btns };
   });
 
   await scenario('H2. cloud re-uploaded with the same inputs: poll flags cloud-ahead, icon click marks synced with no compare dialog and no upload', async () => {
@@ -299,7 +447,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await page.evaluate(() => window.__msfixDebug.pollNow());   // focus polls are throttled and H just used one
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
     const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced without a dialog');
     await wait(300);
     if (await page.evaluate(() => !!document.querySelector('.msfix-dialog'))) throw new Error('compare dialog opened for identical inputs: ' + (await dialogText()));
@@ -310,7 +458,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     return { cloudUpdatedAt: put.json.updatedAt };
   });
 
-  await scenario('H3. compare from the sync icon, "Keep both": the cloud copy lands in a new slot, the icon drops to local-ahead (not cloud-ahead again), nothing is uploaded', async () => {
+  await scenario('H3. choice dialog from the sync icon: "Show differences" reveals the field list, "Load cloud copy" loads it (synced), no "Keep both" and no new slot', async () => {
     await wait(5);
     const put = await cloudReq('PUT', '/v1/characters/HTomer', makeDoc('HTomer', 299, '은월', base));
     if (put.status !== 200) throw new Error('external PUT ' + put.status);
@@ -318,36 +466,41 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
     const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
     const slotsBefore = await page.evaluate(H.slots);
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
-    await clickDialogButton('Keep both');
-    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 8000, 'local-ahead after Keep both');
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /The cloud copy is newer/.test(d.innerText); }, 8000, 'choice dialog');
+    const before = await dialogText();
+    if (/Keep both/.test(before)) throw new Error('"Keep both" is still offered: ' + before);
+    if (/Level: yours/.test(before)) throw new Error('diff list visible before the toggle: ' + before);
+    const toggled = await page.evaluate(() => { var d = document.querySelector('.msfix-dialog'); var l = Array.from(d.querySelectorAll('[role=button], span')).find(x => x.textContent.trim() === 'Show differences'); if (!l) return null; l.click(); return l.textContent.trim(); });
+    if (toggled === null) throw new Error('no "Show differences" link in: ' + before);
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Hide differences/.test(d.innerText) && /Level: yours 276, cloud 299/.test(d.innerText) && /(field is|fields are) different/.test(d.innerText); }, 3000, 'diff list shown');
+    const shown = await dialogText();
+    await page.evaluate(() => { var d = document.querySelector('.msfix-dialog'); Array.from(d.querySelectorAll('[role=button], span')).find(x => x.textContent.trim() === 'Hide differences').click(); });
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Show differences/.test(d.innerText) && !/Level: yours 276/.test(d.innerText); }, 3000, 'diff list hidden again');
+    await clickDialogButton('Load cloud copy');
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '299'), 8000, 'form shows the cloud copy');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after Load cloud copy');
+    await waitFor(() => /Loaded the cloud copy/.test(document.body.innerText), 4000, 'toast');
     await wait(300);
     if (await page.evaluate(() => !!document.querySelector('.msfix-dialog'))) throw new Error('a dialog is still open: ' + (await dialogText()));
     const slots = await page.evaluate(H.slots);
-    const nk = Object.keys(slots).find(k => !slotsBefore[k] && slots[k].label === 'HTomer (cloud)');
-    if (!nk || slots[nk].level !== '299') throw new Error('cloud copy slot missing: ' + JSON.stringify(slots));
+    if (Object.keys(slots).length !== Object.keys(slotsBefore).length) throw new Error('slot count changed: ' + JSON.stringify(slots));
+    const key = Object.keys(slots).find(k => slots[k].label === 'HTomer');
+    if (!key || slots[key].level !== '299') throw new Error('slot not replaced by the cloud copy: ' + JSON.stringify(slots[key]));
     const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key;
-    if (!k || !b.slots[k] || b.slots[k].cloudUpdatedAt !== put.json.updatedAt || b.slots[k].remoteUpdatedAt !== put.json.updatedAt) throw new Error('binding did not acknowledge the cloud version: ' + JSON.stringify(b.slots[k]));
-    if (b.slots[nk]) throw new Error('the new slot must stay unbound: ' + JSON.stringify(b.slots[nk]));
-    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length !== putsBefore) throw new Error('Keep both uploaded');
-    // a second icon click must offer the upload dialog, not the compare dialog again
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload changes to the cloud\?/.test(d.innerText); }, 4000, 'upload dialog on second click');
+    if (k !== key || !b.slots[k] || b.slots[k].cloudUpdatedAt !== put.json.updatedAt) throw new Error('binding did not adopt the cloud version: ' + JSON.stringify(b.slots[k]));
+    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length !== putsBefore) throw new Error('Load cloud copy uploaded');
+    // put the level back to 276 for the later scenarios (an edit, then an explicit upload)
+    await setDraft({ level: '276' });
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead after the edit');
+    await wait(900);
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload changes to the cloud\?/.test(d.innerText); }, 4000, 'upload dialog');
     await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after upload');
     const doc = await cloudReq('GET', '/v1/characters/htomer');
     if (doc.json.preset.data.stat.level !== '276') throw new Error('cloud level after upload ' + doc.json.preset.data.stat.level);
-    // cleanup: drop the extra local slot so later scenarios see one HTomer row
-    await openPicker();
-    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer \(cloud\)/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
-    await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
-    await clickDialogButton('Delete local');
-    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HTomer'; }, 8000, 'HTomer still selected after cleanup');
-    const after = await page.evaluate(H.slots);
-    if (Object.values(after).some(s => s.label === 'HTomer (cloud)')) throw new Error('extra slot still present ' + JSON.stringify(after));
-    return { newSlot: nk, cloudLevel: doc.json.preset.data.stat.level, icon: await page.evaluate(H.icon) };
+    return { diff: shown.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level, icon: await page.evaluate(H.icon) };
   });
 
   await scenario('I. auto-upload is off: an edit is saved locally but never uploaded until the icon is clicked', async () => {
@@ -358,7 +511,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead');
     await wait(4500);
     if (cloudRequests.filter(r => /^PUT/.test(r)).length !== puts0) throw new Error('an upload happened without a click');
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after explicit upload');
     const doc = await cloudReq('GET', '/v1/characters/htomer');
@@ -371,7 +524,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     const elh = h.asElement(); if (!elh) throw new Error('no level input 277');
     await elh.click({ clickCount: 3 }); await page.keyboard.type('278');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead');
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await waitFor(() => { var d = document.querySelector('.msfix-dialog'); if (!d || !/Upload changes to the cloud\?/.test(d.innerText)) return false; var names = Array.from(d.querySelectorAll('button')).map(b => b.textContent.trim()); return names.indexOf('Cancel') !== -1 && names.indexOf('Discard my changes') !== -1 && names.indexOf('Upload') !== -1 && /stay in History/.test(d.innerText); }, 4000, 'Cancel/Discard my changes/Upload dialog');
     await clickDialogButton('Discard my changes');
     await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '277'), 8000, 'form restored to 277');
@@ -379,6 +532,57 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     const slots = await page.evaluate(H.slots); const key = Object.keys(slots).find(k => slots[k].label === 'HTomer');
     if (slots[key].level !== '277') throw new Error('slot not restored: ' + JSON.stringify(slots[key]));
     return { level: slots[key].level };
+  });
+
+  await scenario('I4. upload hits a 409: "The cloud copy changed" asks one question; Replace uploads without If-Match, Load cloud copy loads it', async () => {
+    const conflictOnce = async (level) => {
+      await setDraft({ level });
+      await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead');
+      await wait(900);
+      await wait(5);   // the stub stamps updatedAt from the clock
+      const put = await cloudReq('PUT', '/v1/characters/HTomer', makeDoc('HTomer', 299, '은월', base));   // moved elsewhere, no poll yet
+      if (put.status !== 200) throw new Error('external PUT ' + put.status);
+      await clickSync();
+      await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload changes to the cloud\?/.test(d.innerText); }, 4000, 'upload dialog');
+      await clickDialogButton('Upload');
+      await waitFor(() => { var d = document.querySelectorAll('.msfix-dialog'); var t = d.length ? d[d.length - 1].innerText : ''; return /The cloud copy changed/.test(t); }, 8000, 'conflict dialog');
+      const txt = await dialogText();
+      for (const need of ['Lv 299', 'updated', 'Replace it with your inputs?']) if (txt.indexOf(need) === -1) throw new Error('missing "' + need + '" in: ' + txt);
+      if (/Keep both|Your inputs|Cloud copy\b/.test(txt.replace(/Load cloud copy/g, ''))) throw new Error('old wording in: ' + txt);
+      const btns = await delBtns();
+      if (btns.join('|') !== 'Cancel|Load cloud copy|Replace') throw new Error('buttons: ' + JSON.stringify(btns));
+      return { put, txt, btns };
+    };
+    // Replace: the local inputs win, sent without If-Match
+    const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
+    const a = await conflictOnce('278');
+    await clickDialogButton('Replace');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after Replace');
+    let doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (doc.json.preset.data.stat.level !== '278') throw new Error('cloud level after Replace ' + doc.json.preset.data.stat.level);
+    const puts = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length - putsBefore;
+    if (puts !== 2) throw new Error('expected the 409 attempt and the forced upload, saw ' + puts + ' PUTs');
+    // Load cloud copy: the cloud inputs replace the form, nothing more is uploaded
+    const b = await conflictOnce('279');
+    const putsMid = cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length;
+    await clickDialogButton('Load cloud copy');
+    await waitFor(() => Array.from(document.querySelectorAll('input')).some(i => i.value === '299'), 8000, 'form shows the cloud copy');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after Load cloud copy');
+    if (cloudRequests.filter(r => /^PUT \/v1\/characters\/htomer$/i.test(r)).length !== putsMid) throw new Error('Load cloud copy uploaded');
+    doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (doc.json.preset.data.stat.level !== '299' || doc.json.updatedAt !== b.put.json.updatedAt) throw new Error('cloud copy changed by Load cloud copy: ' + JSON.stringify({ level: doc.json.preset.data.stat.level }));
+    const bind = await page.evaluate(H.bindings); const k = bind.selected && bind.selected.key;
+    if (!k || !bind.slots[k] || bind.slots[k].cloudUpdatedAt !== b.put.json.updatedAt) throw new Error('binding did not adopt the cloud version: ' + JSON.stringify(bind.slots[k]));
+    // back to 277 for the later scenarios
+    await setDraft({ level: '277' });
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead after restore');
+    await wait(900);
+    await clickSync();
+    await clickDialogButton('Upload');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after restore');
+    doc = await cloudReq('GET', '/v1/characters/htomer');
+    if (doc.json.preset.data.stat.level !== '277') throw new Error('cloud level after restore ' + doc.json.preset.data.stat.level);
+    return { dialog: a.txt.slice(0, 200), buttons: a.btns, cloudLevel: doc.json.preset.data.stat.level };
   });
 
   await scenario('I3. an impossible Main Stat % (4831) flags the row with "check inputs" and the upload asks "Upload anyway"; fixing it uploads normally', async () => {
@@ -390,7 +594,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => /HTomer[^]*check inputs/.test((document.querySelector('.msfix-charpicker .msfix-dd').innerText || '').replace(/\s+/g, ' ')), 3000, 'row flagged with check inputs').catch(async () => { throw new Error('row not flagged: ' + (await dropdownText()).slice(0, 200)); });
     const rowText = await dropdownText();
     await page.keyboard.press('Escape'); await wait(200);
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await clickDialogButton('Upload');
     await waitFor(() => { var d = document.querySelectorAll('.msfix-dialog'); var t = d.length ? d[d.length - 1].innerText : ''; return /Check the inputs for HTomer/.test(t) && /Main Stat % is 4831/.test(t); }, 4000, 'warning dialog');
     const warnText = await dialogText();
@@ -402,7 +606,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await setDraft({ mainStatPer: fixed });
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'local-ahead', 5000, 'local-ahead after fix');
     await wait(900);
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced after fix');
     const doc = await cloudReq('GET', '/v1/characters/htomer');
@@ -511,9 +715,9 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     if (put.status !== 200) throw new Error('external PUT ' + put.status);
     await page.evaluate(() => window.__msfixDebug.pollNow());
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead');
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
-    await clickDialogButton('Upload my inputs');
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /The cloud copy is newer/.test(d.innerText); }, 8000, 'choice dialog');
+    await clickDialogButton('Upload mine');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced');
     const doc = await cloudReq('GET', '/v1/characters/htomer');
     if (!doc.json.meta || doc.json.meta.hexaConverted !== null) throw new Error('cloud meta.hexaConverted: ' + JSON.stringify(doc.json.meta));
@@ -581,7 +785,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     const icon2 = await page.evaluate(H.icon); if (icon2 !== 'synced') throw new Error('icon after renaming back ' + icon2);
     return { ign: b.slots[k].ign, icon: icon2 };
   });
-  await scenario('O. row menu: rename HTomer → HTomerX (icon not-uploaded), delete from cloud, delete local', async () => {
+  await scenario('O. row menu: rename HTomer → HTomerX (icon not-uploaded), one Delete entry: Delete cloud, then Delete (local only)', async () => {
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomer/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Rename');
@@ -600,25 +804,90 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await clickDialogButton('Overwrite'); await wait(1500);
     const icon2 = await page.evaluate(H.icon); if (icon2 !== 'not-uploaded') throw new Error('icon after local overwrite ' + icon2);
     if ((await cloudReq('GET', '/v1/characters/htomerx')).status !== 404) throw new Error('overwrite uploaded a never-uploaded character');
-    await page.click('.msfix-charpicker .msfix-sync'); await clickDialogButton('Upload');
+    await clickSync(); await clickDialogButton('Upload');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 10000, 'uploaded under new name');
     if ((await cloudReq('GET', '/v1/characters/htomerx')).status !== 200) throw new Error('HTomerX not in cloud');
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomerX/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    // the row menu has exactly one Delete entry
+    const menu = await delBtns();
+    if (menu.filter(t => /^Delete/.test(t)).length !== 1 || menu.some(t => /Delete from cloud/.test(t))) throw new Error('row menu delete entries: ' + JSON.stringify(menu));
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && /Delete from cloud/.test(d.innerText); }, 4000, 'delete dialog');
-    await clickDialogButton('Delete from cloud');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && /Delete cloud/.test(d.innerText); }, 4000, 'delete dialog');
+    const four = await delBtns();
+    if (four.join('|') !== 'Cancel|Delete local|Delete cloud|Delete both') throw new Error('delete buttons: ' + JSON.stringify(four));
+    const red = await page.evaluate(() => Array.from(document.querySelector('.msfix-dialog').querySelectorAll('button')).filter(b => /text-red-500/.test(b.className)).map(b => b.textContent.trim()));
+    if (red.join('|') !== 'Delete local|Delete cloud|Delete both') throw new Error('red buttons: ' + JSON.stringify(red));
+    await clickDialogButton('Delete cloud');
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'not-uploaded after cloud delete');
+    await waitFor(() => /Deleted from the cloud/.test(document.body.innerText), 4000, 'cloud delete toast');
     if ((await cloudReq('GET', '/v1/characters/htomerx')).status !== 404) throw new Error('cloud copy still there');
+    const slotsMid = await page.evaluate(H.slots);
+    if (!Object.values(slotsMid).some(s => s.label === 'HTomerX')) throw new Error('Delete cloud removed the local copy ' + JSON.stringify(slotsMid));
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HTomerX/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && !/Delete from cloud/.test(d.innerText); }, 4000, 'delete dialog (local only)');
-    await clickDialogButton('Delete local');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && !/Delete cloud/.test(d.innerText); }, 4000, 'delete dialog (local only)');
+    const two = await delBtns();
+    if (two.join('|') !== 'Cancel|Delete') throw new Error('delete buttons without a cloud copy: ' + JSON.stringify(two));
+    await clickDialogButton('Delete');
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
     const slots = await page.evaluate(H.slots);
     if (Object.values(slots).some(s => s.label === 'HTomerX')) throw new Error('slot still present ' + JSON.stringify(slots));
-    return { remaining: Object.values(slots).map(s => s.label), icon: await page.evaluate(H.icon) };
+    return { remaining: Object.values(slots).map(s => s.label), icon: await page.evaluate(H.icon), buttons: four };
+  });
+
+  await scenario('O6. Delete both: the cloud copy goes first, then the local character; a failed cloud delete keeps the local copy', async () => {
+    await setDraft({ level: '250', myClass: '은월' });
+    await wait(700);
+    await openPicker();
+    await clickOption('+ Add character');
+    await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
+    await typeInDialog('HBoth');
+    await clickDialogButton('Add');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await clickDialogButton('Add');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HBoth'; }, 8000, 'HBoth selected');
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload to the cloud\?/.test(d.innerText); }, 4000, 'upload prompt');
+    await clickDialogButton('Upload');
+    await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'synced', 8000, 'synced');
+    if ((await cloudReq('GET', '/v1/characters/hboth')).status !== 200) throw new Error('HBoth not in the cloud');
+    // a cloud delete that fails keeps everything: answer the DELETE with a 500 from the browser side (the stub never sees it)
+    const delsBefore = cloudRequests.filter(r => /^DELETE \/v1\/characters\/hboth$/i.test(r)).length;
+    const block = r => { if (r.method() === 'DELETE' && /\/v1\/characters\/hboth$/i.test(r.url())) r.respond({ status: 500, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'boom' }) }); else r.continue(); };
+    await page.setRequestInterception(true); page.on('request', block);
+    try {
+      await openPicker();
+      await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HBoth/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+      await clickDialogButton('Delete');
+      await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && /Delete both/.test(d.innerText); }, 4000, 'delete dialog');
+      await clickDialogButton('Delete both');
+      await waitFor(() => /Could not delete HBoth from the cloud/.test(document.body.innerText), 6000, 'failure toast');
+      await wait(300);
+    } finally {
+      page.off('request', block); await page.setRequestInterception(false);
+    }
+    const kept = await page.evaluate(H.slots); const keptTrig = await page.evaluate(H.trigger);
+    if (!Object.values(kept).some(s => s.label === 'HBoth') || keptTrig.value !== 'HBoth') throw new Error('local copy lost after a failed cloud delete: ' + JSON.stringify({ kept, keptTrig }));
+    if ((await cloudReq('GET', '/v1/characters/hboth')).status !== 200) throw new Error('cloud copy gone although the delete failed');
+    // now for real
+    await openPicker();
+    await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HBoth/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
+    await clickDialogButton('Delete');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText) && /Delete both/.test(d.innerText); }, 4000, 'delete dialog');
+    await clickDialogButton('Delete both');
+    await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after Delete both');
+    await waitFor(() => /Deleted here and from the cloud/.test(document.body.innerText), 4000, 'toast');
+    const slots = await page.evaluate(H.slots);
+    if (Object.values(slots).some(s => s.label === 'HBoth')) throw new Error('slot still present ' + JSON.stringify(slots));
+    const doc = await cloudReq('GET', '/v1/characters/hboth');
+    if (doc.status !== 404) throw new Error('cloud copy still there: ' + doc.status);
+    const b = await page.evaluate(H.bindings);
+    if (Object.values(b.slots).some(x => x && x.ign === 'HBoth')) throw new Error('binding left behind: ' + JSON.stringify(b.slots));
+    const hist = await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}')));
+    if (hist.indexOf('hboth') !== -1) throw new Error('history left behind: ' + JSON.stringify(hist));
+    return { remaining: Object.values(slots).map(s => s.label), cloud: doc.status, deletes: cloudRequests.filter(r => /^DELETE \/v1\/characters\/hboth$/i.test(r)).length - delsBefore };
   });
 
   await scenario('O4. Delete local when the site store throws: the binding, selection and history are put back and a toast says so', async () => {
@@ -629,7 +898,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
     await typeInDialog('HOrphan');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HOrphan\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
     await clickDialogButton('Add');
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === 'HOrphan'; }, 8000, 'HOrphan selected');
     await setDraft({ level: '251' }); await wait(1500);   // one autosave = one history entry
@@ -641,8 +910,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
       await openPicker();
       await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HOrphan/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
       await clickDialogButton('Delete');
-      await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
-      await clickDialogButton('Delete local');
+      await clickDeleteLocal();
       await waitFor(() => /Could not delete the character/.test(document.body.innerText), 6000, 'failure toast');
       await wait(300);
     } finally {
@@ -657,15 +925,14 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HOrphan/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog (cleanup)');
-    await clickDialogButton('Delete local');
+    await clickDeleteLocal();
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after cleanup delete');
     const slots2 = await page.evaluate(H.slots);
     if (Object.values(slots2).some(s => s.label === 'HOrphan')) throw new Error('cleanup delete failed ' + JSON.stringify(slots2));
     return { restored: after, remaining: Object.values(slots2).map(s => s.label) };
   });
 
-  await scenario('O2. local-only IGN created elsewhere: poll flags cloud-ahead, icon click compares instead of overwriting', async () => {
+  await scenario('O2. local-only IGN created elsewhere: poll flags cloud-ahead, icon click asks instead of overwriting', async () => {
     await setDraft({ level: '250', myClass: '은월' });
     await wait(700);
     await openPicker();
@@ -673,7 +940,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
     await typeInDialog('HGhost');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HGhost\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
     await clickDialogButton('Add');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'icon not-uploaded');
     // another browser uploads the same IGN
@@ -682,13 +949,15 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await page.evaluate(() => window.__msfixDebug.pollNow());
     await waitFor(() => document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'cloud-ahead', 8000, 'cloud-ahead after poll');
     const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /HGhost differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /The cloud copy is newer/.test(d.innerText); }, 8000, 'choice dialog');
     const txt = await dialogText();
+    const btns = await delBtns();
+    if (btns.join('|') !== 'Cancel|Load cloud copy|Upload mine') throw new Error('buttons: ' + JSON.stringify(btns));
     await clickDialogButton('Cancel');
     await wait(300);
     const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
-    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without the compare dialog');
+    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without asking');
     const doc = await cloudReq('GET', '/v1/characters/hghost');
     if (doc.status !== 200 || doc.json.preset.data.stat.level !== '299') throw new Error('cloud copy replaced: ' + doc.status + ' ' + JSON.stringify(doc.json && doc.json.preset && doc.json.preset.data.stat.level));
     const b = await page.evaluate(H.bindings); const k = b.selected && b.selected.key;
@@ -697,15 +966,14 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HGhost/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
-    await clickDialogButton('Delete local');
+    await clickDeleteLocal();
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
     const del = await cloudReq('DELETE', '/v1/characters/hghost', null, { 'X-Confirm': 'hghost' });
     if (del.status !== 204) throw new Error('cleanup DELETE ' + del.status);
-    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level };
+    return { dialog: txt.slice(0, 200), cloudLevel: doc.json.preset.data.stat.level, buttons: btns };
   });
 
-  await scenario('O3. not-uploaded icon click looks first: an IGN created elsewhere (no poll yet) compares instead of overwriting', async () => {
+  await scenario('O3. not-uploaded icon click looks first: an IGN created elsewhere (no poll yet) asks instead of overwriting', async () => {
     await setDraft({ level: '250', myClass: '은월' });
     await wait(700);
     await openPicker();
@@ -713,29 +981,28 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => !!document.querySelector('.msfix-dialog input'), 4000, 'add dialog');
     await typeInDialog('HGhost');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add HGhost\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
     await clickDialogButton('Add');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') === 'not-uploaded', 8000, 'icon not-uploaded');
     // another browser uploads the same IGN; this tab has not polled, so the icon still says not-uploaded
     const put = await cloudReq('PUT', '/v1/characters/HGhost', makeDoc('HGhost', 299, '은월', base));
     if (put.status !== 201 && put.status !== 200) throw new Error('external PUT ' + put.status);
     const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
-    await page.click('.msfix-charpicker .msfix-sync');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /HGhost differs from the cloud/.test(d.innerText); }, 8000, 'compare dialog');
+    await clickSync();
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /The cloud copy is newer/.test(d.innerText); }, 8000, 'choice dialog');
     const txt = await dialogText();
-    if (/Upload to the cloud\?/.test(txt)) throw new Error('blind upload confirm shown instead of the compare');
+    if (/Upload to the cloud\?/.test(txt)) throw new Error('blind upload confirm shown instead of the question');
     await clickDialogButton('Cancel');
     await wait(300);
     const putsAfter = cloudRequests.filter(r => /^PUT \/v1\/characters\/hghost$/i.test(r)).length;
-    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without the compare dialog');
+    if (putsAfter !== putsBefore) throw new Error('icon click uploaded without asking');
     const doc = await cloudReq('GET', '/v1/characters/hghost');
     if (doc.status !== 200 || doc.json.preset.data.stat.level !== '299') throw new Error('cloud copy replaced: ' + doc.status + ' ' + JSON.stringify(doc.json && doc.json.preset && doc.json.preset.data.stat.level));
     // cleanup: drop the local slot and the external cloud copy so later scenarios start clean
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /HGhost/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
-    await clickDialogButton('Delete local');
+    await clickDeleteLocal();
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
     const del = await cloudReq('DELETE', '/v1/characters/hghost', null, { 'X-Confirm': 'hghost' });
     if (del.status !== 204) throw new Error('cleanup DELETE ' + del.status);
@@ -781,7 +1048,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await clickDialogButton('Set IGN');
     await waitFor(() => { var i = document.querySelector('.msfix-dialog input'); return !!i && i.value === 'Main'; }, 4000, 'add dialog prefilled with Main');
     await clickDialogButton('Add');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add Main\?/.test(d.innerText); }, 6000, '404 confirm dialog');
+    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Add this character\?/.test(d.innerText); }, 6000, '404 confirm dialog');
     await clickDialogButton('Add');
     await waitFor(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'); return Object.keys(b).some(k => b[k].ign === 'Main'); }, 6000, 'Main bound');
     const hist = await page.evaluate(() => JSON.parse(localStorage.getItem('msfix:cloud:history') || '{}'));
@@ -867,7 +1134,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await waitFor(() => { var b = JSON.parse(localStorage.getItem('msfix:cloud:slots') || '{}'); var s = JSON.parse(localStorage.getItem('msfix:cloud:selected') || 'null'); return !!(s && b[s.key] && b[s.key].ign === 'LongLabel'); }, 10000, 'LongLabel imported + selected');
     await waitFor(() => document.querySelector('.msfix-sync') && document.querySelector('.msfix-sync').getAttribute('data-msfix-sync') !== 'synced', 8000, 'icon not synced');
     const putsBefore = cloudRequests.filter(r => /^PUT \/v1\/characters\/longlabel$/i.test(r)).length;
-    await page.click('.msfix-charpicker .msfix-sync');
+    await clickSync();
     await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Upload/.test(d.innerText); }, 8000, 'upload confirm');
     await clickDialogButton('Upload');
     const outcome = await waitFor(() => { if (/Cloud upload failed \(400/.test(document.body.innerText)) return 'toast'; var i = document.querySelector('.msfix-sync'); return i && i.getAttribute('data-msfix-sync') === 'synced' ? 'synced' : null; }, 10000, '400 toast or synced');
@@ -880,8 +1147,7 @@ function makeDoc(ign, level, cls, base) { const d = JSON.parse(JSON.stringify(ba
     await openPicker();
     await page.evaluate(() => { const r = Array.from(document.querySelectorAll('.msfix-dd [role=option]')).find(x => /LongLabel|xxxxxxxx/.test(x.textContent)); r.querySelector('[data-msfix-act=menu]').click(); });
     await clickDialogButton('Delete');
-    await waitFor(() => { var d = document.querySelector('.msfix-dialog'); return d && /Delete this character\?/.test(d.innerText); }, 4000, 'delete dialog');
-    await clickDialogButton('Delete local');
+    await clickDeleteLocal();
     await waitFor(() => { var i = document.querySelector('.msfix-charpicker input[role=combobox]'); return !!i && i.value === ''; }, 8000, 'deselected after delete');
     if (doc.status === 200) await cloudReq('DELETE', '/v1/characters/longlabel', null, { 'X-Confirm': 'longlabel' });
     return { outcome, rejected: bad.map(b => b[0]), cloud: doc.status };

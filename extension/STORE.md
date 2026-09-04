@@ -13,8 +13,8 @@ Everything is pre-built. You only need the developer account and the upload clic
 3. Store listing (copy/paste below), category **Fun** or **Productivity → Tools**, language English.
 4. Privacy tab:
    - Single purpose: "MapleScouter Enhancements translates maplescouter.com into English, remembers site preferences, and adds a character picker with optional cloud sync of the user's stat presets."
-   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the character presets of the site's Character page. The only network requests go to scouter.tomerh2001.com, and only when the user loads or uploads a character by IGN."
-   - Data usage: the only data transmitted is a stat preset the user explicitly uploads to scouter.tomerh2001.com. Declare "Website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
+   - Host permission justification: "The extension only runs on maplescouter.com to translate its interface text, persist the user's language/server selection, and manage the character presets of the site's Character page. The only network requests go to scouter.tomerh2001.com, and only when the user loads, uploads or adds a character by IGN or opens the character list (which also fetches that character's public ranking look by IGN), plus the character picture itself from Nexon's public avatar image host."
+   - Data usage: the only data transmitted is a stat preset the user explicitly uploads to scouter.tomerh2001.com, plus the IGN alone for cloud checks and ranking look-ups. Declare "Website content" as collected for app functionality only, not sold, not used for unrelated purposes; link the privacy policy (PRIVACY.md on GitHub).
 5. Submit for review. First review usually takes a few hours to a couple of days.
 6. For updates: bump the userscript @version, rebuild, upload the new zip to the existing item.
 
@@ -23,7 +23,7 @@ Everything is pre-built. You only need the developer account and the upload clic
 **Name:** MapleScouter Enhancements
 
 **Summary (132 chars max):**
-Full English for maplescouter.com, a character picker with auto-save, cloud sync by IGN, history, no ads. Made for GMS players.
+Full English for maplescouter.com, a character picker with looks from the GMS rankings, cloud sync by IGN, history, no ads.
 
 **Description:**
 MapleScouter (환산주스탯) is the best MapleStory stat calculator around, but its English mode is missing thousands of translations and it cannot load GMS characters. MapleScouter Enhancements (formerly MapleScouter English Fix) fixes both.
@@ -36,11 +36,12 @@ Translation
 
 Characters (the Character page)
 - One list of your saved characters with class, level and HEXA stat; pick one and everything you type is saved into it as you go
+- Shows each character's current look from the GMS rankings
 - Switch characters instantly, no reload
 - Cloud sync by IGN: upload a character, then load it from any browser by typing its name. Nothing is uploaded until you click the sync icon
-- The sync icon shows synced, edited since the last upload, cloud copy newer, or conflict, and lets you upload, discard your changes, or compare
+- The sync icon shows synced, edited since the last upload, cloud copy newer, or conflict, and asks one simple question: upload, load the cloud copy, or replace it
 - History: the last 10 saves of each character, restorable with one click
-- Overwrite, rename, download or delete a character from its menu; import JSON files
+- Overwrite, rename, download or delete a character from its menu (delete local, cloud, or both); import JSON files
 
 Quality of life
 - Remembers your language and server (GMS, KMS, JMS, TMS, MSEA), no more resetting to Korean every visit

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "MapleScouter Enhancements",
   "version": "1.3.5",
-  "description": "Full English for maplescouter.com, a character picker with auto-save, cloud sync by IGN, save history, and no ads.",
+  "description": "Full English for maplescouter.com, a character picker with looks from the GMS rankings, cloud sync by IGN, history, no ads.",
   "homepage_url": "https://github.com/tomerh2001/maplescouter-en-fix",
   "icons": {
     "16": "icons/icon16.png",

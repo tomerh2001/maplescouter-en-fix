@@ -1,6 +1,6 @@
 # Privacy Policy, MapleScouter Enhancements
 
-_Last updated: 2026-09-03_
+_Last updated: 2026-09-04_
 
 MapleScouter Enhancements does **not collect, sell, or track any user data.** The only data that can leave your browser is a MapleStory character preset you choose to upload to the cloud sync service described below.
 
@@ -13,6 +13,7 @@ MapleScouter Enhancements does **not collect, sell, or track any user data.** Th
 ## Cloud sync (scouter.tomerh2001.com)
 - **What is sent when you upload:** the inputs of the character you upload (class, level, stats, equipment settings) and the IGN you typed. Nothing is uploaded until you click the sync icon and confirm.
 - **What is sent otherwise:** the IGN only. This happens when you type an IGN to load a character from the cloud, when you add a character and the extension checks whether that IGN already exists, and when it checks the selected character for a newer cloud copy (at most every 5 minutes while the tab is visible, plus at most once a minute when you return to the tab).
+- **Character look:** when you type an IGN in the add dialog, open the character list, or rename a character, the extension asks scouter.tomerh2001.com for that character's public ranking entry (level, class, look). The server fetches it from Nexon's public GMS ranking page and caches it for a day. Only the IGN is sent. The picture itself is then loaded by your browser from Nexon's public avatar image host, like any image on a web page. Answers are kept in your browser for up to a week, and no look-up happens in the background.
 - Your IP address is seen by the server like for any web request. It is used for rate limiting and request logs only.
 - **The service is public:** there are no accounts. Anyone who knows an IGN can load or overwrite its preset. The extension never lists other people's characters. Do not upload anything you consider private.
 - **Opt out:** do not upload. A character that has never been uploaded stays in your browser, and no cloud request is made for it apart from the IGN checks above. Set `localStorage["msfix:cloud:url"]` to another server to use your own backend.

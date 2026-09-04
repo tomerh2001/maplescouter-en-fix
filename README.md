@@ -27,17 +27,22 @@ Updates: Tampermonkey → Utilities → *Check for userscript updates* (each rel
 - **Player and character names are never touched** — IGNs, rankings, and user posts stay exactly as they are.
 - Korean-only API content that can't be translated (the Latest Updates changelog) is hidden in English mode instead of showing raw Korean.
 
-### Characters and cloud sync (Character page), 1.5.x
+### Characters and cloud sync (Character page), 1.7.x
 The site's **Load Preset / Save Preset** buttons and the IGN search on `/input` are replaced by a **Characters** picker and a **sync icon**.
 - **One list, chips for where a character lives.** Every saved preset is a row: name, class, level, **HEXA** (the site's HEXA-converted stat, filled in once you press Result), when it was saved and when its cloud copy changed, with `local` / `cloud` chips. The selected character is highlighted.
+- **Every character shows its current look.** The list, the closed picker and the add dialog show the character's in-game look, taken from the public GMS rankings. The add dialog also shows the class and level the rankings report (or "Not found in the GMS rankings"; you can still add it). Looks are looked up once when you open the list, once when you type an IGN in the add dialog, and once after a rename or Set IGN. They are cached in your browser for a week, never fetched in the background.
 - **Auto-save.** Pick a character and everything you type is saved into it as you go. Switching characters loads the other one instantly, without a reload.
-- **Row menu (⋯ or → on a row):** overwrite it with the current inputs, rename / set its IGN, delete the local preset, delete it from the cloud.
-- **+ Add character** starts a new character from the current inputs (local until you upload it). If that IGN already exists locally you choose to overwrite it or switch to it; if it exists in the cloud you get a comparison (class/level/HEXA, dates, the exact fields that differ) and choose: upload yours, use the cloud copy, or keep both.
+- **Row menu (⋯ or → on a row):** overwrite it with the current inputs, rename / set its IGN, download it as JSON, open its history, delete it.
+- **+ Add character** starts a new character from the current inputs (local until you upload it). Every question is a short one with plain buttons:
+  - IGN already saved here: **Overwrite it** (the current inputs replace it) or **Switch to it**.
+  - IGN already in the cloud: **Keep my inputs** (saved here, linked to the IGN, not uploaded until you click the sync icon) or **Load from cloud** (the cloud copy becomes the new character, already synced).
+  - IGN not in the cloud: **Add**. The character stays local until you upload it.
 - **Cloud by IGN, never a directory.** Type an IGN in the search box to load that character from [scouter.tomerh2001.com](https://scouter.tomerh2001.com); the extension never lists other people's characters.
-- **Sync icon** with a proper tooltip: not uploaded, synced, edited since the last upload, cloud copy newer, or conflict. click it to upload, pull, or compare. It re-checks every 30 s and on focus. Uploads are always explicit (no auto-upload).
+- **Sync icon** with a proper tooltip: not uploaded, synced, edited since the last upload, cloud copy newer, or conflict. Click it to upload, load the cloud copy, or replace it. When the two copies differ you get one question with two or three buttons, and a **Show differences** link lists the fields that changed. It re-checks every 30 s and on focus. Uploads are always explicit (no auto-upload).
 - **Import JSON...** in the picker footer imports a native or old-format preset file; a file that carries an `ign` which already exists offers to replace it.
 - **History.** The row menu keeps the last 10 saves of each character (uploads, edits, cloud pulls, and what was there before an overwrite). Pick one to load it into the form locally; upload it from the sync icon if you want it in the cloud.
 - **Adding a character keeps it local.** "+ Add character" saves the current inputs under the IGN in this browser; the sync icon shows "not uploaded" until you click it.
+- **One Delete, four choices.** Delete in the row menu asks "Delete this character?" and offers **Cancel**, **Delete local**, **Delete cloud** and **Delete both** when the character has a cloud copy. Delete cloud keeps the local copy linked to the IGN. Delete both removes the cloud copy first and keeps the local copy if that fails. A character with no cloud copy gets a plain Cancel / Delete.
 - The cloud is **public and unauthenticated by design**: anyone who knows an IGN can load or overwrite it. Don't store anything you consider private.
 - **Export carries the IGN.** Save-as-JSON files of a linked preset contain `"ign"`, and importing such a file links the new preset again.
 
@@ -59,7 +64,7 @@ The site's **Load Preset / Save Preset** buttons and the IGN search on `/input` 
 | **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~5,600 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
 | **DOM dictionary** | A `MutationObserver` + exact-match KO→EN dictionary (official game-data join) for text that's hardcoded or arrives from the API at runtime, plus pattern rules for dynamic strings (Korean number units 억/만, dates, burst-window notation like 3극 4준). |
 | **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, preset import/overwrite — all in the userscript core. |
-| **Characters & cloud** | Drives the site's own zustand stores (`manual-store` = the form's draft, `preset` = the slots), captured while webpack executes them, so loads and auto-saves need no reload. Slot↔IGN links live in `localStorage` (`msfix:cloud:*`); the backend is a small file-backed JSON API ([maplescouter-cloud](https://github.com/tomerh2001/maplescouter-cloud)) reached with plain `fetch` + `If-Match` for conflict detection. Set `localStorage.msfix:cloud:url` to point the script at another backend (e.g. a local one for testing). |
+| **Characters & cloud** | Drives the site's own zustand stores (`manual-store` = the form's draft, `preset` = the slots), captured while webpack executes them, so loads and auto-saves need no reload. Slot↔IGN links live in `localStorage` (`msfix:cloud:*`); the backend is a small file-backed JSON API ([maplescouter-cloud](https://github.com/tomerh2001/maplescouter-cloud)) reached with plain `fetch` + `If-Match` for conflict detection. Character looks come from `GET scouter.tomerh2001.com/v1/avatar/:ign`, which proxies Nexon's public GMS ranking API (the site cannot call it directly: no CORS) and caches each answer for a day; the browser keeps its own copy in `localStorage` (`msfix:cloud:avatars`, hits for 7 days, misses for 1 day) and loads the picture straight from Nexon's avatar image host. Set `localStorage.msfix:cloud:url` to point the script at another backend (e.g. a local one for testing). |
 
 ## Repo layout
 
@@ -79,7 +84,7 @@ Rebuild after editing data: `node build.js`. When the site ships new Korean stri
 
 - Translations aim for **official GMS terms first**, then widely-used community terms for KMS-only content with no official English name yet (e.g. Legion Champion).
 - A React hydration warning (#418) in the console is expected — the server renders Korean, the client re-renders English.
-- Cloud sync sends only the preset you explicitly upload to scouter.tomerh2001.com. Nothing else ever leaves your browser — see [PRIVACY.md](PRIVACY.md).
+- Cloud sync sends only the preset you explicitly upload to scouter.tomerh2001.com, plus the IGN alone for cloud checks and ranking look-ups. Nothing else ever leaves your browser — see [PRIVACY.md](PRIVACY.md).
 - Not affiliated with maplescouter.com or Nexon. All game data © Nexon.
 
 ## License

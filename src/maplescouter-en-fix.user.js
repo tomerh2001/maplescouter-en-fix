@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.6.0
+// @version      1.7.0
 // @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
@@ -704,7 +704,7 @@
     var prevFocus = document.activeElement;
     box.tabIndex = -1;
     function focusables() {
-      var all = box.querySelectorAll('input,button,select,textarea,a[href]'), out = [];
+      var all = box.querySelectorAll('input,button,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'), out = [];
       for (var i = 0; i < all.length; i++) if (!all[i].disabled && !all[i].hidden && all[i].offsetParent !== null) out.push(all[i]);
       return out;
     }
@@ -1429,7 +1429,15 @@
     '.msfix-charpicker input::placeholder,.msfix-dialog input::placeholder{color:var(--text-gray-low)}',
     '.msfix-charpicker .msfix-opt[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--color-primary,#e5772f)}',
     '.msfix-charpicker .msfix-row-menu{opacity:.55}.msfix-charpicker .msfix-opt:hover .msfix-row-menu,.msfix-charpicker .msfix-opt.msfix-active .msfix-row-menu,.msfix-charpicker .msfix-row-menu:focus{opacity:1}',
-    '@media (prefers-reduced-motion: reduce){.msfix-charpicker .animate-spin{animation:none}}'
+    '@media (prefers-reduced-motion: reduce){.msfix-charpicker .animate-spin{animation:none}}',
+    /* character look: a fixed box that holds the 96x96 render scaled down, or a faint silhouette */
+    '.msfix-avatar{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:6px;overflow:hidden;background:transparent;color:var(--text-gray-low,#8a8f98)}',
+    '.msfix-avatar img{display:block;width:100%;height:100%;object-fit:contain;background:transparent}',
+    '.msfix-avatar svg{width:70%;height:70%;opacity:.35}',
+    '.msfix-avatar-sm{width:20px;height:20px;border-radius:4px}',
+    '.msfix-avatar-lg{width:48px;height:48px;border-radius:8px}',
+    '.msfix-charpicker .msfix-avatar-trigger{position:absolute;left:6px;top:50%;transform:translateY(-50%);pointer-events:none}',
+    '.msfix-charpicker input.msfix-has-avatar{padding-left:30px}'
   ].join('\n');
   var _hasSupport = null;
   function hasSelectorSupport() {
@@ -1686,7 +1694,8 @@
       'history': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
       'pencil': '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
       'trash': '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
-      'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>'
+      'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+      'user': '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
     };
     return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-' + name + ' size-4' + (extra ? ' ' + extra : '') + '">' + (P[name] || '') + '</svg>';
   }
@@ -1719,7 +1728,13 @@
       };
       fetch(cloudUrl() + path, init).then(function (res) {
         // A gateway error (502/503/504, Cloudflare 52x/53x) means the backend is down: treat it like a network failure.
-        if (res.status === 502 || res.status === 503 || res.status === 504 || res.status >= 520) { clearTimeout(timer); setOffline(true); reject({ offline: true, status: res.status }); return; }
+        // With opts.soft it resolves as a plain failed response instead (the avatar route answers 502 when Nexon
+        // is down, which says nothing about the cloud), leaving cloud.offline untouched either way.
+        if (res.status === 502 || res.status === 503 || res.status === 504 || res.status >= 520) {
+          clearTimeout(timer);
+          if (opts.soft) { resolve({ status: res.status, ok: false, json: null, etag: '', retryAfter: 0 }); return; }
+          setOffline(true); reject({ offline: true, status: res.status }); return;
+        }
         if (method === 'HEAD' || res.status === 204) { done(res, null); return; }
         res.text().then(function (t) { var j = null; try { j = t ? JSON.parse(t) : null; } catch (e) {} done(res, j); }, function () { done(res, null); });
       }, function (err) { clearTimeout(timer); setOffline(true); reject({ offline: true, error: err }); });
@@ -1753,6 +1768,121 @@
     if (r && r.offline) return 'Cloud unavailable';
     if (r && r.status === 429) return 'The cloud is rate limiting requests. Try again in ' + (r.retryAfter ? r.retryAfter + ' seconds.' : 'a minute.');
     return what;
+  }
+  /* -- character look: GET /v1/avatar/:ign (the backend proxies the Nexon rankings) --------
+     Cached in localStorage 'msfix:cloud:avatars' as { [ignLower]: { image, level, job, worldId,
+     at, miss } }. A hit is reused for 7 days, a miss for 1 day. Traffic budget: a lookup runs
+     only (a) when the dropdown opens, for rows without a fresh entry, at most AVATAR_OPEN_MAX
+     per open, (b) in the add dialog once the typed IGN has sat unchanged for 600 ms, (c) after
+     a rename or Set IGN. Never from polling, focus, autosave, page load or a re-render. -- */
+  var LS_CLOUD_AVATARS = 'msfix:cloud:avatars';
+  var AVATAR_HIT_MS = 7 * 86400000, AVATAR_MISS_MS = 86400000, AVATAR_OPEN_MAX = 8, AVATAR_DEBOUNCE_MS = 600, AVATAR_MAX = 300, AVATAR_RETRY_MS = 600000;
+  var avatarInflight = {};   // ignLower -> [cb]: one request per IGN at a time
+  var avatarRetryAt = {};    // ignLower -> time: an error that is not a miss (429, 500) waits before the next try
+  var avatarBroken = {};     // image URL -> true: the browser could not load it (404, blocked host); not requested again this session
+  function avatarMap() { var m = lsJson(LS_CLOUD_AVATARS, {}); return m && typeof m === 'object' ? m : {}; }
+  function avatarFresh(e) {
+    if (!e || !e.at) return false;
+    var t = new Date(e.at).getTime(); if (isNaN(t)) return false;
+    return Date.now() - t < (e.miss ? AVATAR_MISS_MS : AVATAR_HIT_MS);
+  }
+  // The fresh entry for an IGN, else null. A miss is an entry too ({ miss: true }): callers check `.image`.
+  function avatarCached(ign) { var e = avatarMap()[String(ign || '').toLowerCase()]; return avatarFresh(e) ? e : null; }
+  function avatarStore(lower, entry) {
+    var m = avatarMap(); m[lower] = entry;
+    var ks = Object.keys(m);
+    if (ks.length > AVATAR_MAX) {
+      ks.sort(function (a, b) { return String(m[a].at || '') < String(m[b].at || '') ? -1 : 1; });
+      for (var i = 0; i < ks.length - AVATAR_MAX; i++) delete m[ks[i]];
+    }
+    lsSet(LS_CLOUD_AVATARS, JSON.stringify(m));
+  }
+  // cb(entry) once: the fresh cached entry right away (no request), else after one GET. A miss
+  // arrives as { miss: true }; offline or any other failure arrives as null and caches nothing.
+  function avatarFor(ign, cb) {
+    cb = cb || function () {};
+    ign = String(ign || '').trim();
+    var lower = ign.toLowerCase();
+    if (!IGN_RE.test(ign)) { cb(null); return; }
+    var hit = avatarCached(lower);
+    if (hit) { cb(hit); return; }
+    if (avatarInflight[lower]) { avatarInflight[lower].push(cb); return; }
+    if (cloud.offline || !cloudEnabled() || (avatarRetryAt[lower] && Date.now() < avatarRetryAt[lower])) { cb(null); return; }
+    avatarInflight[lower] = [cb];
+    var settle = function (entry) {
+      var cbs = avatarInflight[lower] || []; delete avatarInflight[lower];
+      for (var i = 0; i < cbs.length; i++) try { cbs[i](entry); } catch (e) {}
+      if (entry && entry.image) paintAvatars(lower, entry);
+    };
+    var p;
+    try { p = cloudFetch('GET', '/v1/avatar/' + encodeURIComponent(ign), { soft: true }); } catch (e) { settle(null); return; }
+    p.then(function (r) {
+      var j = r.json;
+      if (r.ok && j && j.image) {
+        var e = { image: String(j.image), level: Number(j.level) || 0, job: String(j.job || ''), worldId: Number(j.worldId) || 0, at: nowIso() };
+        avatarStore(lower, e); settle(e); return;
+      }
+      if (r.status === 404) { var miss = { at: nowIso(), miss: true }; avatarStore(lower, miss); settle(miss); return; }
+      avatarRetryAt[lower] = Date.now() + Math.max(AVATAR_RETRY_MS, (r.retryAfter || 0) * 1000);
+      settle(null);
+    }, function (err) {
+      // A network failure backs off per IGN too, so a reopened dropdown does not re-ask for the same names.
+      if (!(err && err.disabled)) avatarRetryAt[lower] = Date.now() + AVATAR_RETRY_MS;
+      settle(null);
+    });
+  }
+  // A box that shows the cached look of `ign` (or the silhouette). data-msfix-avatar carries the
+  // IGN so a lookup that lands later can repaint it in place.
+  function avatarBox(ign, extraCls) {
+    var box = el('span', 'msfix-avatar' + (extraCls ? ' ' + extraCls : ''));
+    box.setAttribute('data-msfix-avatar', String(ign || '').toLowerCase());
+    box.setAttribute('aria-hidden', 'true');
+    var e = ign ? avatarCached(ign) : null;
+    paintAvatarBox(box, e && e.image ? e : null);
+    return box;
+  }
+  function paintAvatarBox(box, entry) {
+    var broken = !!(entry && entry.image && avatarBroken[entry.image]);
+    if (entry && entry.image && !broken) {
+      var img = box.querySelector('img');
+      if (!img) {
+        img = el('img'); img.alt = ''; img.draggable = false;
+        img.setAttribute('loading', 'lazy'); img.setAttribute('referrerpolicy', 'no-referrer'); img.setAttribute('draggable', 'false');
+        img.addEventListener('error', function () {
+          avatarBroken[img.getAttribute('src') || ''] = true;   // remembered for the session: no repaint requests it again
+          if (img.parentNode === box) { box.innerHTML = svgIcon('user'); box.setAttribute('data-msfix-avatar-state', 'error'); }
+          if (picker.el && !picker.open) renderTrigger();   // the closed trigger hides a look that cannot load
+        });
+        box.innerHTML = ''; box.appendChild(img);
+      }
+      if (img.getAttribute('src') !== entry.image) img.src = entry.image;
+      box.setAttribute('data-msfix-avatar-state', 'ok');
+    } else if (!box.querySelector('svg')) {
+      box.innerHTML = svgIcon('user'); box.setAttribute('data-msfix-avatar-state', broken ? 'error' : 'none');
+    } else if (broken) {
+      box.setAttribute('data-msfix-avatar-state', 'error');
+    }
+  }
+  // A lookup landed: update every box on the page that shows this IGN, without re-rendering the
+  // list (the active row and the keyboard focus stay where they are).
+  function paintAvatars(lower, entry) {
+    if (!/^[a-z0-9]{1,16}$/.test(lower)) return;
+    var nodes = document.querySelectorAll('.msfix-avatar[data-msfix-avatar="' + lower + '"]');
+    for (var i = 0; i < nodes.length; i++) paintAvatarBox(nodes[i], entry);
+    if (picker.el && !picker.open) renderTrigger();   // the closed trigger shows the selected character's look
+  }
+  // Dropdown just opened: look up the listed characters that have no fresh entry, at most
+  // AVATAR_OPEN_MAX of them. Re-renders (typing, sync state) never call this.
+  function avatarWarm() {
+    if (!picker.open) return;
+    var n = 0, seen = {};
+    for (var i = 0; i < picker.items.length && n < AVATAR_OPEN_MAX; i++) {
+      var it = picker.items[i]; if (it.type !== 'local') continue;
+      var b = cloud.bindings[it.key]; if (!b || !b.ign || !IGN_RE.test(b.ign)) continue;
+      var lower = b.ign.toLowerCase(); if (seen[lower]) continue; seen[lower] = 1;
+      if (avatarCached(lower) || avatarInflight[lower]) continue;
+      n++; avatarFor(b.ign);
+    }
   }
   // `report` (optional) collects the fields conformTo had to reset. Only the explicit "load
   // the cloud copy" path (applyCloudDoc) shows it: compare and preview callers stay quiet.
@@ -1806,8 +1936,8 @@
     'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable. Click to retry.' },
     'synced':       { icon: 'cloud-check',    color: 'text-green-600',     title: 'Synced with the cloud.' },
     'local-ahead':  { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited since the last upload. Click to upload.' },
-    'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer. Click to compare.' },
-    'conflict':     { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Changed here and in the cloud. Click to compare.' }
+    'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer. Click to choose.' },
+    'conflict':     { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Changed here and in the cloud. Click to choose.' }
   };
   /* -- site-styled hover tooltip for the sync icon (the native title is slow and unstyled) -- */
   var TIP_CLS = 'bg-popover text-popover-foreground z-[2147483647] w-fit rounded-md px-3 py-1.5 text-xs text-balance shadow-md msfix-tip';
@@ -1962,7 +2092,7 @@
       if (info.key !== key || (info.state !== 'local-ahead' && info.state !== 'not-uploaded')) return;
       uploadSlot(key, { quiet: true, onConflict: function () {
         // never pop a modal mid-edit: the icon shows the conflict, one toast per character
-        if (cloud.conflictToastKey !== key) { cloud.conflictToastKey = key; toastErr(cloud.bindings[key].ign + ' changed in the cloud. Click the sync icon to compare.'); }
+        if (cloud.conflictToastKey !== key) { cloud.conflictToastKey = key; toastErr(cloud.bindings[key].ign + ' changed in the cloud. Click the sync icon to choose.'); }
       } });
     }, AUTOUPLOAD_MS);
   }
@@ -2101,7 +2231,7 @@
         var remote = r.json ? r.json.updatedAt : undefined;
         if (remote === null) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; } else if (remote) b.remoteUpdatedAt = remote;
         saveBindings(); updateIcon();
-        if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud. Click the sync icon to compare.');
+        if (opts.onConflict) opts.onConflict(); else toastErr(b.ign + ' changed in the cloud. Click the sync icon to choose.');
         if (cb) cb(false);
       } else {
         toastErr(r.status === 429 ? 'The cloud is rate limiting uploads. Try again in ' + (r.retryAfter ? r.retryAfter + ' seconds.' : 'a minute.')
@@ -2142,46 +2272,75 @@
     if (core) return { skill: 'Skill Core ', mastery: 'Mastery Core ', rein: 'Enhancement Core ', general: 'Common Core ' }[core[1]] + core[2];
     return leaf;
   }
-  function infoCard(body, heading, lines) {
-    var card = el('div', 'outline outline-outline-gray-med rounded-lg px-3 py-2 flex flex-col gap-0.5 text-left');
-    card.appendChild(el('span', 'text-sm font-semibold truncate', heading));
-    lines.forEach(function (l) { if (l) card.appendChild(el('span', 'text-text-gray-low text-xs truncate', l)); });
-    body.appendChild(card);
-    return card;
+  // The look cached by the avatar lookup (localStorage 'msfix:cloud:avatars'). Read only: a
+  // dialog never starts a lookup of its own, it shows the picture when one is already known.
+  function cloudDialogAvatar(ign) {
+    var e = avatarCached(ign);
+    return e && e.image && !e.miss ? e : null;
   }
-  // Both sides of a local/cloud disagreement with what actually differs, then a choice.
+  // One short question about a local/cloud disagreement: [Cancel] [mid] [go]. The subtitle
+  // carries the cloud copy's meta; the field-by-field diff stays behind "Show differences".
+  //   o.title, o.doc, o.question, o.midLabel/o.onMid, o.goLabel/o.onGo
+  //   o.ign        show the character's cached look under the title
+  //   o.yours      one extra line under the subtitle ("Yours: ...")
+  //   o.localData  enables the "Show differences" toggle (local vs the cloud copy)
   function compareDialog(o) {
     closePicker();
-    var lm = slotMeta(o.localData), cm = docMeta(o.doc), cloudData = docPresetData(o.doc);
-    var diffs = []; if (cloudData) leafDiff(o.localData, cloudData, '', diffs);
+    var cm = docMeta(o.doc), cloudData = docPresetData(o.doc);
+    var diffs = []; if (o.localData && cloudData) leafDiff(o.localData, cloudData, '', diffs);
     msDialog({
-      title: o.title || (o.ign + ' already exists in the cloud'),
-      subtitle: o.subtitle || '',
+      title: o.title,
+      subtitle: metaLine(cm) + ', updated ' + relTime(o.doc.updatedAt),
       build: function (body, close) {
-        infoCard(body, 'Your inputs', [metaLine(lm),
-          'Edited ' + relTime(o.localSavedAt) + (o.localSyncedAt ? ', uploaded ' + relTime(o.localSyncedAt) : ', never uploaded')]);
-        infoCard(body, 'Cloud copy', [metaLine(cm),
-          'Updated ' + relTime(o.doc.updatedAt) + (o.doc.updatedAt ? ' (' + shortDate(o.doc.updatedAt) + ')' : '')]);
-        if (diffs.length) {
-          var box = el('div', 'flex flex-col gap-0.5 text-left');
-          box.appendChild(el('span', 'text-xs font-semibold', diffs.length + (diffs.length === 1 ? ' field is different' : ' fields are different')));
+        var av = o.ign ? cloudDialogAvatar(o.ign) : null;
+        if (av) {
+          var wrap = el('div', 'flex w-full justify-center');
+          wrap.appendChild(avatarBox(o.ign, 'msfix-avatar-lg'));
+          body.insertBefore(wrap, body.children[1] || null);   // between the title and the subtitle
+        }
+        if (o.yours) body.appendChild(el('span', CLS.hint, o.yours));
+        if (o.localData) {
+          var link = el('span', 'text-text-gray-low text-xs underline cursor-pointer self-center', 'Show differences');
+          link.setAttribute('role', 'button'); link.tabIndex = 0;
+          var box = el('div', 'flex flex-col gap-0.5 text-left'); box.style.display = 'none';
+          if (!diffs.length) box.appendChild(el('span', CLS.hintLeft, cloudData ? 'Same inputs on both sides.' : 'The cloud copy has no inputs to compare.'));
+          else box.appendChild(el('span', 'text-xs font-semibold', diffs.length + (diffs.length === 1 ? ' field is different' : ' fields are different')));
           diffs.slice(0, 8).forEach(function (d) {
             var row = el('span', 'text-text-gray-low text-xs truncate', diffLabel(d.path) + ': yours ' + fmtVal(d.a) + ', cloud ' + fmtVal(d.b));
             row.title = d.path + ': yours ' + fmtVal(d.a) + ', cloud ' + fmtVal(d.b);
             box.appendChild(row);
           });
           if (diffs.length > 8) box.appendChild(el('span', 'text-text-gray-low text-xs', 'and ' + (diffs.length - 8) + ' more'));
-          body.appendChild(box);
-        } else if (cloudData) body.appendChild(el('span', CLS.hint, 'Same inputs on both sides.'));
-        var list = el('div', CLS.list);
-        list.appendChild(msRow('Upload my inputs', 'Replaces the cloud copy', function () { close(); o.onOverwriteCloud(); }));
-        list.appendChild(msRow('Use cloud copy', 'Loads it into the form', function () { close(); o.onReplaceLocal(); }));
-        if (o.onSaveAsNew) list.appendChild(msRow('Keep both', 'Saves the cloud copy as a new character', function () { close(); o.onSaveAsNew(); }));
-        body.appendChild(list);
-        var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button';
-        cancel.addEventListener('click', function () { close(); });
-        body.appendChild(cancel);
+          var toggle = function () { var show = box.style.display === 'none'; box.style.display = show ? '' : 'none'; link.textContent = show ? 'Hide differences' : 'Show differences'; };
+          link.addEventListener('click', toggle);
+          link.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+          body.appendChild(link); body.appendChild(box);
+        }
+        body.appendChild(el('span', 'text-center text-sm', o.question));
+        var row = el('div', 'flex w-full gap-2');
+        var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); return x; };
+        mk('Cancel', CLS.ghost, null);
+        mk(o.midLabel, CLS.ghost, o.onMid);
+        mk(o.goLabel, CLS.primary, o.onGo);
+        body.appendChild(row);
       }
+    });
+  }
+  // An upload came back 409: the cloud copy moved since this browser last saw it. One question.
+  function openUploadConflict(key) {
+    var b = cloud.bindings[key], slot = presetMap()[key];
+    if (!b || !slot) return;
+    flushAutosave();
+    fetchDoc(b.ign, function (err, doc) {
+      if (err) { toastErr(httpErrText(err, 'Could not read ' + b.ign + ' from the cloud')); return; }
+      if (!doc) { b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; saveBindings(); updateIcon(); toastErr(b.ign + ' is no longer in the cloud. Click the icon to upload it again.'); return; }
+      slot = presetMap()[key];
+      compareDialog({
+        title: 'The cloud copy changed', doc: doc, localData: slot.data,
+        question: 'Replace it with your inputs?',
+        midLabel: 'Load cloud copy', onMid: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
+        goLabel: 'Replace', onGo: function () { uploadSlot(key, { ifMatch: false }); }
+      });
     });
   }
   // The sync icon's click: one action per state.
@@ -2210,7 +2369,7 @@
           var discardBtn = mk('Discard my changes', CLS.ghost + ' text-red-500', function () { discardToCloud(key); });
           discardBtn.title = 'Replace my inputs with the cloud copy';
           discardBtn.setAttribute('aria-label', 'Replace my inputs with the cloud copy');
-          mk('Upload', CLS.primary, function () { uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); });
+          mk('Upload', CLS.primary, function () { uploadSlot(key, { onConflict: function () { openUploadConflict(key); } }); });
           body.appendChild(row);
         } });
         return;
@@ -2244,24 +2403,21 @@
         toastOk(b.ign + ' matches the cloud copy. Nothing to do.');
         return;
       }
+      // "Changed here and in the cloud" only when the local inputs moved too; otherwise the
+      // cloud copy is simply newer (a never-uploaded character counts as nothing changed here).
+      var st = key === selectedKey() ? syncInfo().state : (b.syncedHash && hashData(slot.data) !== b.syncedHash ? 'conflict' : 'cloud-ahead');
       compareDialog({
-        ign: b.ign, doc: doc, localData: slot.data, localLabel: slotName(key, slot), localSavedAt: slot.savedAt, localSyncedAt: b.syncedAt,
-        title: b.ign + ' differs from the cloud',
-        onOverwriteCloud: function () { b.cloudUpdatedAt = doc.updatedAt; saveBindings(); uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); },
-        onReplaceLocal: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
-        onSaveAsNew: function () {
-          var d = docPresetData(doc); if (!d) return;
-          var nk = writeSlot(null, d, doc.ign + ' (cloud)'); if (!nk) return;
-          // The cloud copy now lives in its own slot, so this slot has seen that version. Drop the
-          // "cloud is newer" flag and mark the local inputs as not uploaded yet (local-ahead).
-          b.cloudUpdatedAt = doc.updatedAt; b.remoteUpdatedAt = doc.updatedAt; b.syncedHash = null;
-          cloud.conflictToastKey = null; saveBindings(); updateIcon();
-          toastOk('Saved the cloud copy as Character ' + nk + '. Your inputs stay here, not uploaded.');
-        }
+        title: st === 'conflict' || st === 'local-ahead' ? 'Changed here and in the cloud' : 'The cloud copy is newer',
+        doc: doc, localData: slot.data,
+        yours: 'Yours: ' + metaLine(slotMeta(slot.data)) + ', edited ' + relTime(slot.savedAt),
+        question: 'Load the cloud copy, or upload yours?',
+        midLabel: 'Load cloud copy', onMid: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
+        goLabel: 'Upload mine', onGo: function () { b.cloudUpdatedAt = doc.updatedAt; saveBindings(); uploadSlot(key, { onConflict: function () { openUploadConflict(key); } }); }
       });
     });
   }
-  // "+ Add character": IGN → look it up → save current inputs (and upload) or compare.
+  // "+ Add character": IGN → look it up → save the current inputs, or ask one question when
+  // the IGN is already saved here or already in the cloud.
   function openAddDialog(prefill, opts) {
     opts = opts || {};
     closePicker();
@@ -2280,41 +2436,73 @@
         input.setAttribute('autocapitalize', 'off'); input.setAttribute('spellcheck', 'false');
         body.appendChild(input);
         var err = el('span', 'text-red-500 text-xs text-center'); err.hidden = true; body.appendChild(err);
+        // The character's look, once the typed IGN has sat unchanged for 600 ms: one line plus the image.
+        var prev = el('div', 'msfix-avatar-preview flex w-full items-center justify-center gap-2 text-xs'); prev.hidden = true;
+        var prevBox = avatarBox('', ''), prevText = el('span', 'text-text-gray-low text-xs');
+        prev.appendChild(prevBox); prev.appendChild(prevText); body.appendChild(prev);
+        var lookTimer = null;
+        var stopLook = function () { if (lookTimer) { clearTimeout(lookTimer); lookTimer = null; } };
+        var showLook = function (ign, e) {
+          if (input.value.trim() !== ign) return;   // typed on since
+          if (!e) { prev.hidden = true; return; }    // offline or unknown: say nothing
+          prevBox.setAttribute('data-msfix-avatar', ign.toLowerCase());
+          paintAvatarBox(prevBox, e.image ? e : null);
+          prevText.textContent = e.image ? ((e.job ? e.job + ' ' : '') + 'Lv ' + (e.level || '?')) : 'Not found in the GMS rankings';
+          prev.hidden = false;
+        };
+        var scheduleLook = function () {
+          stopLook();
+          var ign = input.value.trim();
+          if (!IGN_RE.test(ign)) { prev.hidden = true; return; }
+          var hit = avatarCached(ign);
+          if (hit) { showLook(ign, hit); return; }   // already known: no request, no wait
+          prev.hidden = true;
+          lookTimer = setTimeout(function () {
+            lookTimer = null;
+            if (!document.contains(input) || input.value.trim() !== ign) return;   // dialog closed or text changed
+            avatarFor(ign, function (e) { showLook(ign, e); });
+          }, AVATAR_DEBOUNCE_MS);
+        };
+        input.addEventListener('input', scheduleLook);
         body.appendChild(el('span', CLS.hint, metaLine(slotMeta(localData))));
         var go = function () {
           var ign = input.value.trim();
           if (!IGN_RE.test(ign)) { err.textContent = '1 to 16 letters or digits'; err.hidden = false; input.focus(); return; }
+          stopLook();
           var existing = bindingByIgn(ign);
           if (existing && existing.key !== linkKey) { close(); openExistsLocally(ign, existing.key, localData); return; }
           close(); addCharacter(ign, linkKey, localData);
         };
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-        msActions(body, 'Cancel', function () { close(); }, 'Add', go);
+        msActions(body, 'Cancel', function () { stopLook(); close(); }, 'Add', go);
+        if (input.value.trim()) scheduleLook();
         setTimeout(function () { input.focus(); input.select(); }, 30);
       }
     });
   }
-  // The IGN is already one of the saved characters: overwrite it with these inputs, or switch to it.
+  // The IGN is already one of the saved characters: overwrite it with these inputs (nothing is
+  // uploaded, the sync icon does that later), or switch to it.
   function openExistsLocally(ign, key, localData) {
     var map = presetMap(), slot = map[key]; if (!slot) return;
     var b = cloud.bindings[key];
-    msDialog({ title: ign + ' already exists', subtitle: metaLine(slotMeta(slot.data)) + ', saved ' + relTime(slot.savedAt), build: function (body, close) {
-      var list = el('div', CLS.list);
-      list.appendChild(msRow('Overwrite with these inputs', b && b.cloudUpdatedAt ? 'The cloud copy is uploaded too' : 'Replaces the saved character', function () {
-        close();
+    msDialog({ title: 'Already saved here', subtitle: metaLine(slotMeta(slot.data)) + ', saved ' + relTime(slot.savedAt), build: function (body, close) {
+      var row = el('div', 'flex w-full gap-2');
+      var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); return x; };
+      mk('Cancel', CLS.ghost, null);
+      mk('Overwrite it', CLS.ghost, function () {
         // Save pending edits into the character that is selected now, before the selection moves.
         flushAutosave();
+        var cur = presetMap()[key];
+        if (cur && presetDataOk(cur.data)) pushHistory(key, 'keep', cur.data);
         if (!writeDraftToSlot(key, localData)) return;
+        pushHistory(key, 'edit', localData);
         // localData may be another preset (row menu Set IGN), so load it unless the form already shows it.
         var d0 = currentDraft();
         if (!setSelected(key, !d0 || hashData(d0) !== hashData(localData), true)) return;
-        // Only a character that is already in the cloud uploads here. A linked but never-uploaded one stays local, as the row says.
-        if (b && b.ign && b.cloudUpdatedAt) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
-        else { toastOk('Overwritten' + (b && b.ign ? '. Click the sync icon to upload.' : '')); updateIcon(); }
-      }));
-      list.appendChild(msRow('Switch to it', 'Loads the saved character into the form', function () { close(); setSelected(key, true); }));
-      body.appendChild(list);
-      var cancel = el('button', CLS.ghost, 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', function () { close(); }); body.appendChild(cancel);
+        toastOk('Overwritten' + (b && b.ign ? '. Click the sync icon to upload.' : '')); updateIcon();
+      });
+      mk('Switch to it', CLS.primary, function () { setSelected(key, true); });
+      body.appendChild(row);
     } });
   }
   function addCharacter(ign, linkKey, localData) {
@@ -2324,10 +2512,11 @@
       if (!key) return null;
       bindSlot(key, ign, doc);
       setSelected(key, !!linkKey && linkKey !== sel, true);   // the form already shows these inputs
+      avatarFor(ign);   // usually a cache hit: the add dialog looked it up while the IGN was typed
       return key;
     };
     if (!cloudEnabled()) {
-      confirmDialog('Add ' + ign + '?', 'Saved in this browser only.', 'Add', function () { if (bindLocal(null)) toastOk('Saved ' + ign); });
+      confirmDialog('Add this character?', 'Saved in this browser only.', 'Add', function () { if (bindLocal(null)) toastOk('Saved ' + ign); });
       return;
     }
     fetchDoc(ign, function (err, doc) {
@@ -2336,7 +2525,7 @@
         return;
       }
       if (!doc) {
-        confirmDialog('Add ' + ign + '?', 'Starts it from the current inputs. Upload it later from the sync icon.', 'Add', function () {
+        confirmDialog('Add this character?', 'Starts it from the current inputs. Upload it later from the sync icon.', 'Add', function () {
           if (bindLocal(null)) toastOk('Added. Click the sync icon to upload.');
         });
         return;
@@ -2348,15 +2537,17 @@
         return;
       }
       compareDialog({
-        ign: ign, doc: doc, localData: localData, localLabel: linkKey ? slotName(linkKey, presetMap()[linkKey]) : 'current inputs',
-        localSavedAt: linkKey && presetMap()[linkKey] ? presetMap()[linkKey].savedAt : nowIso(), localSyncedAt: null,
-        onOverwriteCloud: function () { var key = bindLocal(doc); if (!key) return; cloud.bindings[key].syncedHash = null; uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } }); },
-        onReplaceLocal: function () { var key = bindLocal(doc); if (!key) return; if (applyCloudDoc(key, doc)) toastOk('Loaded ' + ign + ' from the cloud'); },
-        onSaveAsNew: linkKey ? null : function () {
-          var d = docPresetData(doc); if (!d) return;
-          var nk = writeSlot(null, d, ign); if (!nk) return;
-          bindSlot(nk, ign, doc); setSelected(nk, true, true); toastOk('Saved the cloud copy of ' + ign + ' as a new character');
-        }
+        title: 'Already in the cloud', ign: ign, doc: doc,
+        question: 'Load the cloud copy, or keep the inputs on the page?',
+        // Keep my inputs: saved and linked, not uploaded. The binding has seen this cloud version
+        // (so the next upload sends If-Match) but no synced hash, which reads as local-ahead.
+        midLabel: 'Keep my inputs', onMid: function () {
+          var key = bindLocal(doc); if (!key) return;
+          var nb = cloud.bindings[key]; nb.syncedHash = null; nb.syncedAt = null;
+          cloud.conflictToastKey = null; saveBindings(); updateIcon();
+          toastOk('Saved here. Click the sync icon to upload.');
+        },
+        goLabel: 'Load from cloud', onGo: function () { var key = bindLocal(doc); if (!key) return; if (applyCloudDoc(key, doc)) toastOk('Loaded from the cloud'); }
       });
     });
   }
@@ -2456,7 +2647,7 @@
       pushHistory(key, 'edit', d);
       setSelected(key, false, true);
       // Only a character that is already in the cloud uploads here. A linked but never-uploaded one stays local, as the dialog says.
-      if (b && b.ign && b.cloudUpdatedAt) uploadSlot(key, { onConflict: function () { openCompareForSlot(key); } });
+      if (b && b.ign && b.cloudUpdatedAt) uploadSlot(key, { onConflict: function () { openUploadConflict(key); } });
       else { toastOk('Overwritten' + (b && b.ign ? '. Click the sync icon to upload.' : '')); updateIcon(); }
     });
   }
@@ -2486,6 +2677,7 @@
         moveHistory(oldHist, histKey(key));
         if (wasSelected) setSelected(key, false, true);
         renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
+        avatarFor(ign);
         toastOk('Renamed to ' + ign + (same || !cloudEnabled() ? '' : '. Click the sync icon to upload it.'));
       };
       input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
@@ -2493,7 +2685,7 @@
       setTimeout(function () { input.focus(); input.select(); }, 30);
     } });
   }
-  function deleteLocalSlot(key) {
+  function deleteLocalSlot(key, okMsg) {
     var slot = presetMap()[key]; if (!slot) return;
     var name = slotName(key, slot), b = cloud.bindings[key];
     (function () {
@@ -2512,33 +2704,56 @@
         toastErr('Could not delete the character'); return;
       }
       reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
-      toastOk('Deleted from this browser');
+      toastOk(okMsg || 'Deleted from this browser');
     })();
   }
-  function deleteCloud(key) {
-    var b = cloud.bindings[key]; if (!b || !b.ign) return;
+  // Remove the cloud copy. `done(ok)` runs after the request settles when given; without it the
+  // result is announced with a toast (the plain "Delete cloud" path).
+  function deleteCloud(key, done) {
+    var b = cloud.bindings[key]; if (!b || !b.ign) { if (done) done(false); return; }
+    var ign = b.ign;
     (function () {
       busy(1);
-      cloudFetch('DELETE', cloudPath(b.ign), { headers: { 'X-Confirm': b.ign } }).then(function (r) {
+      cloudFetch('DELETE', cloudPath(ign), { headers: { 'X-Confirm': ign } }).then(function (r) {
         busy(-1);
         if (r.ok || r.status === 404) {
           b.cloudUpdatedAt = null; b.remoteUpdatedAt = null; b.syncedHash = null; b.syncedAt = null; saveBindings(); updateIcon(); if (picker.open) renderDropdown();
-          toastOk('Deleted from the cloud');
-        } else toastErr(httpErrText(r, 'Could not delete ' + b.ign + ' from the cloud (' + r.status + ')'));
-      }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable'); updateIcon(); });
+          if (done) done(true); else toastOk('Deleted from the cloud');
+        } else { toastErr(httpErrText(r, 'Could not delete ' + ign + ' from the cloud (' + r.status + ')')); if (done) done(false); }
+      }, function (e) { busy(-1); if (!e.disabled) toastErr('Cloud unavailable'); updateIcon(); if (done) done(false); });
     })();
   }
-  // One Delete entry: choose what to delete.
+  // Cloud first, then the copy in this browser. A failed cloud delete keeps the local copy (the
+  // error toast comes from deleteCloud), so nothing is lost without the other half going too.
+  // Slot keys are renumbered whenever a preset is deleted, and nothing blocks the picker while
+  // the DELETE is in flight, so the slot is found again by IGN once the request settles.
+  function deleteBoth(key) {
+    var b = cloud.bindings[key], ign = b && b.ign;
+    deleteCloud(key, function (ok) {
+      if (!ok) return;
+      var hit = bindingByIgn(ign);
+      if (!hit || !presetMap()[hit.key]) { toastOk('Deleted from the cloud'); return; }
+      deleteLocalSlot(hit.key, 'Deleted here and from the cloud');
+    });
+  }
+  // One Delete entry with four choices (two when there is no cloud copy).
   function deleteDialog(key) {
     var slot = presetMap()[key]; if (!slot) return;
     var b = cloud.bindings[key], inCloud = !!(b && b.ign && b.cloudUpdatedAt);
-    msDialog({ title: 'Delete this character?', subtitle: inCloud ? 'The copy in this browser and the cloud copy are deleted separately.' : '', build: function (body, close) {
-      var row = el('div', 'flex w-full flex-wrap gap-2');
-      var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); };
-      mk('Cancel', CLS.ghost, null);
-      mk('Delete local', CLS.ghost + ' text-red-500', function () { deleteLocalSlot(key); });
-      if (inCloud) mk('Delete from cloud', CLS.ghost + ' text-red-500', function () { deleteCloud(key); });
-      body.appendChild(row);
+    msDialog({ title: 'Delete this character?', subtitle: metaLine(slotMeta(slot.data)), build: function (body, close) {
+      var grid = el('div', inCloud ? 'grid w-full grid-cols-2 gap-2' : 'flex w-full gap-2');
+      var mk = function (label, danger, fn) {
+        var x = el('button', CLS.ghost + (danger ? ' text-red-500' : ''), label); x.type = 'button';
+        x.addEventListener('click', function () { close(); if (fn) fn(); });
+        grid.appendChild(x);
+      };
+      mk('Cancel', false, null);
+      if (inCloud) {
+        mk('Delete local', true, function () { deleteLocalSlot(key); });
+        mk('Delete cloud', true, function () { deleteCloud(key); });
+        mk('Delete both', true, function () { deleteBoth(key); });
+      } else mk('Delete', true, function () { deleteLocalSlot(key); });
+      body.appendChild(grid);
     } });
   }
   // Download a saved character as a native preset file (with "ign" so importing re-links it).
@@ -2610,11 +2825,11 @@
 
   /* -- the picker (combobox + sync icon) ------------------------------------------------- */
   var SOFT_BASE = CLS.soft.replace(' text-text-gray-high', '');
-  var picker = { el: null, input: null, dd: null, icon: null, live: null, open: false, filter: '', active: -1, items: [], mountPoll: null, quietFocus: false };
+  var picker = { el: null, input: null, dd: null, icon: null, live: null, av: null, open: false, filter: '', active: -1, items: [], mountPoll: null, quietFocus: false };
   var C_INPUT = 'outline-outline-gray-med bg-surface-gray-surface-0 flex h-8 min-w-0 rounded-[4px] px-3 py-1 text-sm outline transition-[color,box-shadow] md:text-sm focus:outline-outline-gray-high focus:shadow-[0px_0px_0px_3px_rgba(0,0,0,0.20)] w-[216px] pr-8';
   var C_DD = 'msfix-dd bg-surface-gray-surface-0 text-text-gray-high absolute right-0 z-[2147483647] mt-1 w-[340px] max-h-[60vh] overflow-x-hidden overflow-y-auto rounded-md border p-1 shadow-md text-left';
   var C_SECTION = 'text-text-gray-low px-2 py-1 text-[11px] font-semibold tracking-wide';
-  var C_OPT = 'msfix-opt relative flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none text-left';
+  var C_OPT = 'msfix-opt relative flex w-full cursor-pointer items-center gap-2 rounded-sm py-1.5 pr-2 pl-2 text-sm select-none text-left';
   var C_OPT_HOVER = ' hover:bg-surface-gray-surface-1', C_OPT_SELECTED = ' bg-surface-gray-surface-1 hover:bg-surface-gray-surface-2', C_OPT_ACTIVE = 'bg-surface-gray-surface-2';
   var C_BADGE = 'ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ';
   var C_DIVIDER = 'border-outline-gray-med my-1 border-t';
@@ -2629,8 +2844,9 @@
     input.setAttribute('aria-controls', 'msfix-charlist'); input.setAttribute('aria-haspopup', 'listbox'); input.setAttribute('aria-label', 'Character');
     input.setAttribute('autocomplete', 'off'); input.setAttribute('spellcheck', 'false'); input.setAttribute('autocapitalize', 'off');
     var chev = el('span', 'pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-text-gray-low'); chev.innerHTML = svgIcon('chevrons-up-down');
+    var av = avatarBox('', 'msfix-avatar-sm msfix-avatar-trigger'); av.hidden = true;   // the selected character's look, closed state only
     var dd = el('div', C_DD); dd.id = 'msfix-charlist'; dd.setAttribute('role', 'listbox'); dd.hidden = true;
-    rel.appendChild(input); rel.appendChild(chev); rel.appendChild(dd);
+    rel.appendChild(input); rel.appendChild(av); rel.appendChild(chev); rel.appendChild(dd);
     var icon = el('button', SOFT_BASE + ' msfix-sync text-text-gray-low'); icon.type = 'button';
     attachTooltip(icon);
     var live = el('span', 'sr-only'); live.setAttribute('aria-live', 'polite');
@@ -2650,13 +2866,22 @@
       activateItem(+t.getAttribute('data-msfix-idx'));
     });
     icon.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); onSyncClick(); });
-    picker.el = wrap; picker.input = input; picker.dd = dd; picker.icon = icon; picker.live = live;
+    picker.el = wrap; picker.input = input; picker.dd = dd; picker.icon = icon; picker.live = live; picker.av = av;
   }
   function renderTrigger() {
     if (!picker.input) return;
     var key = selectedKey(), map = presetMap();
     var name = key && map[key] ? slotName(key, map[key]) : '';
     picker.input.setAttribute('data-msfix-selected', key || '');
+    // The look sits at the left of the text while the picker is closed (cache only, no lookup here).
+    var b = key ? cloud.bindings[key] : null, ign = b && b.ign ? b.ign : '';
+    var av = ign && !picker.open ? avatarCached(ign) : null, show = !!(av && av.image && !avatarBroken[av.image]);
+    if (picker.av) {
+      picker.av.setAttribute('data-msfix-avatar', ign.toLowerCase());
+      if (show) paintAvatarBox(picker.av, av);
+      picker.av.hidden = !show;
+    }
+    if (show) picker.input.classList.add('msfix-has-avatar'); else picker.input.classList.remove('msfix-has-avatar');
     if (picker.open) { picker.input.placeholder = name || 'Search or add a character...'; return; }
     picker.input.value = name; picker.input.placeholder = 'Choose a character...';
     picker.input.title = name;
@@ -2666,6 +2891,7 @@
     picker.open = true; picker.filter = ''; picker.active = -1;
     picker.input.value = ''; picker.input.setAttribute('aria-expanded', 'true');
     renderTrigger(); picker.dd.hidden = false; renderDropdown();
+    avatarWarm();   // the one place the list asks for looks it does not have yet
   }
   function closePicker() {
     if (!picker.dd || !picker.open) return;
@@ -2728,9 +2954,13 @@
   }
   // A row: name + chips (+ a menu button for saved characters), then one or two wrapping lines.
   // The selected row is marked by the accent bar + background (CSS on aria-selected), nothing else.
-  function optionEl(idx, main, sub1, sub2, badges, selected, menuKey) {
+  // `ign` (optional, may be '') adds the 28px look box on the left; the box shows the cached
+  // look or the silhouette, and a lookup that lands later repaints it in place (paintAvatars).
+  function optionEl(idx, main, sub1, sub2, badges, selected, menuKey, ign) {
     var d = el('div', C_OPT + (selected ? ' msfix-selected' + C_OPT_SELECTED : C_OPT_HOVER)); d.setAttribute('role', 'option'); d.id = 'msfix-opt-' + idx; d.setAttribute('data-msfix-idx', String(idx));
     d.setAttribute('aria-selected', selected ? 'true' : 'false');
+    if (ign !== undefined && ign !== null) d.appendChild(avatarBox(ign, ''));
+    var col = el('div', 'flex min-w-0 flex-1 flex-col items-start gap-0.5'); d.appendChild(col);
     var top = el('div', 'flex w-full items-center gap-2');
     var m = el('span', 'min-w-0 flex-1 truncate ' + (selected ? 'font-semibold' : 'font-medium'), main); m.title = main; top.appendChild(m);
     (badges || []).forEach(function (k) { top.appendChild(badge(k)); });
@@ -2739,9 +2969,9 @@
       kb.setAttribute('data-msfix-act', 'menu'); kb.setAttribute('data-msfix-key', menuKey); kb.setAttribute('aria-label', 'Actions for ' + main); kb.title = 'More actions';
       kb.innerHTML = svgIcon('ellipsis'); top.appendChild(kb);
     }
-    d.appendChild(top);
-    if (sub1) d.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub1));
-    if (sub2) d.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub2));
+    col.appendChild(top);
+    if (sub1) col.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub1));
+    if (sub2) col.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub2));
     return d;
   }
   function renderDropdown() {
@@ -2764,15 +2994,15 @@
       if (!match([name, s.label, b && b.ign, m.classEn, m.classKo])) return;
       var inCloud = !!(b && b.ign && b.cloudUpdatedAt);
       var when = 'Saved ' + relTime(s.savedAt) + (inCloud ? ', cloud copy ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt) : '');
-      dd.appendChild(addItem({ type: 'local', key: k }, optionEl(picker.items.length, name, metaLine(m), when, inCloud ? ['local', 'cloud'] : ['local'], k === sel, k)));
+      dd.appendChild(addItem({ type: 'local', key: k }, optionEl(picker.items.length, name, metaLine(m), when, inCloud ? ['local', 'cloud'] : ['local'], k === sel, k, b && b.ign ? b.ign : '')));
       rows++;
     });
     if (!rows) dd.appendChild(el('div', 'text-text-gray-low px-2 py-1 text-xs', ql ? 'No saved character matches' : 'No saved characters yet'));
     divider();
     if (ql && IGN_RE.test(q) && !typedIsLocal) {
-      dd.appendChild(addItem({ type: 'cloud-lookup', ign: q }, optionEl(picker.items.length, 'Load ' + q + ' from the cloud', 'Loads that character by IGN', '', ['cloud'], false)));
+      dd.appendChild(addItem({ type: 'cloud-lookup', ign: q }, optionEl(picker.items.length, 'Load ' + q + ' from the cloud', 'Loads that character by IGN', '', ['cloud'], false, null, q)));
     }
-    dd.appendChild(addItem({ type: 'add' }, optionEl(picker.items.length, '+ Add character', ql && IGN_RE.test(q) ? 'Start ' + q + ' from the current inputs' : 'Start a new character from the current inputs', '', [], false)));
+    dd.appendChild(addItem({ type: 'add' }, optionEl(picker.items.length, '+ Add character', ql && IGN_RE.test(q) ? 'Start ' + q + ' from the current inputs' : 'Start a new character from the current inputs', '', [], false, null, '')));
     divider();
     var foot = el('div', 'flex flex-col gap-0.5 px-1 pb-1');
     var imp = el('button', C_FOOT_BTN); imp.type = 'button'; imp.id = 'msfix-opt-' + picker.items.length; imp.setAttribute('data-msfix-idx', String(picker.items.length));
@@ -2865,7 +3095,7 @@
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
-    if (DEBUG_REFS) siteRefs.pollNow = function () { pollTick(true); };   // test hook
+    if (DEBUG_REFS) { siteRefs.pollNow = function () { pollTick(true); }; siteRefs.avatarFor = avatarFor; siteRefs.avatarCached = avatarCached; }   // test hooks
     window.addEventListener('storage', function (e) {
       if (!e || (e.key !== LS_CLOUD_SLOTS && e.key !== LS_CLOUD_SELECTED && e.key !== LS_CLOUD_ENABLED && e.key !== LS_CLOUD_AUTO)) return;
       loadBindings(); if (cloud.subscribed) reconcileBindings(true); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
