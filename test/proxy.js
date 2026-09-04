@@ -32,8 +32,10 @@ function fetchUpstream(host, req, bodyChunks, cb) {
     method: req.method,
     headers: { ...headers, host, origin: 'https://' + SITE, referer: 'https://' + SITE + '/' },
   };
-  const up = https.request(options, cb);
-  up.on('error', (e) => cb(null, e));
+  // Call back once: an upstream socket error after the response started must not write a second head.
+  let done = false;
+  const up = https.request(options, (r) => { done = true; cb(r); });
+  up.on('error', (e) => { if (done) { cb(null, e, true); return; } done = true; cb(null, e); });
   if (bodyChunks.length) up.write(Buffer.concat(bodyChunks));
   up.end();
 }
@@ -54,8 +56,8 @@ const server = http.createServer((req, res) => {
     // 2. API tunnel
     const isApi = req.url.startsWith('/__api/');
     const host = isApi ? API : SITE;
-    fetchUpstream(host, req, bodyChunks, (up, err) => {
-      if (!up) { res.writeHead(502); res.end(String(err)); return; }
+    fetchUpstream(host, req, bodyChunks, (up, err, late) => {
+      if (!up) { if (late) { res.destroy(); return; } res.writeHead(502); res.end(String(err)); return; }
       const ct = up.headers['content-type'] || '';
       const isText = /html|javascript|json|css/.test(ct);
       const headers = { ...up.headers };
