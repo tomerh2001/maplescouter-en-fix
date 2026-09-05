@@ -14,6 +14,8 @@ MapleScouter (환산주스탯 계산기) is the best MapleStory stat-equivalence
 2. Click here: **[Install MapleScouter Enhancements](https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js)** — Tampermonkey will show an install prompt.
 3. Open [maplescouter.com](https://maplescouter.com). Done.
 
+**Option C, Firefox add-on:** download `maplescouter-en-fix-firefox.zip` from the [latest release](https://github.com/tomerh2001/maplescouter-en-fix/releases) and load it via about:debugging → This Firefox → "Load Temporary Add-on" (needs Firefox 140 or newer; a temporary add-on is removed when Firefox closes). The listed version on [addons.mozilla.org](https://addons.mozilla.org/firefox/addon/maplescouter-enhancements/) installs permanently and updates itself once the listing is approved. Steps for the listing live in [extension/STORE.md](extension/STORE.md).
+
 Updates: Tampermonkey → Utilities → *Check for userscript updates* (each release bumps the version, which also refreshes the translation data payload). Releases are published automatically on [GitHub Releases](https://github.com/tomerh2001/maplescouter-en-fix/releases).
 
 ## Features

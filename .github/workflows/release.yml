@@ -49,6 +49,7 @@ jobs:
             dist/maplescouter-en-fix.user.js \
             dist/msfix-data.js \
             dist/maplescouter-en-fix-extension.zip \
+            dist/maplescouter-en-fix-firefox.zip \
             --repo "$GITHUB_REPOSITORY" \
             --title "v$V" \
             --generate-notes
