@@ -53,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: python3 scripts/prepare-store-release.py
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: verified-store-packages
           path: store-release/
@@ -82,7 +82,7 @@ jobs:
           CWS_PUBLISHER_ID: '1c6b83a4-2400-48e1-a6c4-dc1923710ec5'
           CWS_EXTENSION_ID: alopdmlliacajfcgnphmojmneanikbdg
         run: node scripts/publish-stores.mjs chrome
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: chrome-submission
@@ -110,7 +110,7 @@ jobs:
           AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
           AMO_ADDON_ID: maplescouter-enhancements@tomerh2001.github.io
         run: node scripts/publish-stores.mjs firefox
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: firefox-submission
