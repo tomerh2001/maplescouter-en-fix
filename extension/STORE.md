@@ -1,3 +1,31 @@
+# Marketplace publishing
+
+## Automated publishing
+
+The Release workflow calls `.github/workflows/publish-stores.yml` directly after creating a release. This direct call is intentional: a GitHub release created with `GITHUB_TOKEN` does not trigger another release-event workflow.
+
+For an existing release, run **Publish marketplaces** from the Actions tab on `main`, with the numeric version and the desired store. It downloads the release assets, compares their files to a fresh build of the release tag, and prepares a source ZIP from that same tag for Mozilla. It never packages uncommitted files or credentials.
+
+Chrome and Firefox run in separate jobs. Chrome uses the v2 API with `publishType: DEFAULT_PUBLISH`, `skipReview: false`, and a 100% rollout. Firefox uses the AMO v5 API with `channel: listed`, includes the source archive on version creation, and adds release and reviewer notes. Both use the existing listings. Store approval remains the store's decision; accepted versions publish without a second manual step.
+
+Repository secrets:
+
+| Secret | Purpose |
+|---|---|
+| `CWS_SERVICE_ACCOUNT_JSON` | Google service-account JSON for Chrome publishing |
+| `AMO_JWT_ISSUER` | Mozilla publishing API issuer |
+| `AMO_JWT_SECRET` | Mozilla publishing API signing secret |
+
+The Chrome identity is `maplescouter-store-publisher@tomerh-home-server.iam.gserviceaccount.com` in project `tomerh-home-server`. It has no project resource roles; Chrome access comes from the service-account entry in the publisher settings. Chrome grants that identity access to the publisher's items; our workflow pins the MapleScouter item ID. The initial public certificate expires on **September 7, 2027**. Before then, replace it in Google Cloud and update `CWS_SERVICE_ACCOUNT_JSON`. Credentials can be replaced with `gh secret set NAME --repo tomerh2001/maplescouter-en-fix` using standard input. Do not put secret values in command arguments or commit them.
+
+The IDs are fixed in the workflow: Chrome publisher `1c6b83a4-2400-48e1-a6c4-dc1923710ec5`, Chrome item `alopdmlliacajfcgnphmojmneanikbdg`, and Firefox GUID `maplescouter-enhancements@tomerh2001.github.io` (AMO ID `3066766`).
+
+Retries first check the store. Published and pending versions are reused, source/notes can be completed after a partial Firefox submission, and a rejected version or a different pending Chrome version stops with an error. Mutating requests are not blindly retried after timeouts. Look at the Developer Dashboard before deciding whether to cancel a different submission.
+
+Normal releases update the packages, not the listing screenshots or privacy declarations. Update those in the dashboards when the product or its data handling changes. The manual instructions below remain useful for first-time setup and recovery.
+
+References: [Chrome API](https://developer.chrome.com/docs/webstore/using-api), [Chrome publication modes](https://developer.chrome.com/docs/webstore/api/reference/rest/v2/publishers.items/publish), [Mozilla version API](https://mozilla.github.io/addons-server/topics/api/addons.html#version-create), [Mozilla API credentials](https://addons.mozilla.org/en-US/developers/addon/api/key/).
+
 # Publishing to the Chrome Web Store
 
 Everything is pre-built. You only need the developer account and the upload clicks.

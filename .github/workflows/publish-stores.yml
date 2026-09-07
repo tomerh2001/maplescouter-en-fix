@@ -1,0 +1,113 @@
+name: Publish marketplaces
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+    secrets:
+      CWS_SERVICE_ACCOUNT_JSON:
+        required: true
+      AMO_JWT_ISSUER:
+        required: true
+      AMO_JWT_SECRET:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing stable GitHub release version, without v
+        required: true
+        type: string
+      store:
+        description: Stores to submit to
+        default: both
+        type: choice
+        options: [both, chrome, firefox]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-publishing
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Test publishing and cloud behavior
+        run: node --test test/cloud-connectivity.test.cjs test/publish-stores.test.mjs
+      - name: Verify released packages and build reviewer source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/prepare-store-release.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-store-packages
+          path: store-release/
+          retention-days: 30
+          if-no-files-found: error
+
+  chrome:
+    needs: prepare
+    if: inputs.store != 'firefox'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verified-store-packages
+          path: store-release
+      - name: Upload Chrome package and submit for automatic publication
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          CWS_SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+          CWS_PUBLISHER_ID: '1c6b83a4-2400-48e1-a6c4-dc1923710ec5'
+          CWS_EXTENSION_ID: alopdmlliacajfcgnphmojmneanikbdg
+        run: node scripts/publish-stores.mjs chrome
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: chrome-submission
+          path: store-results/
+          if-no-files-found: ignore
+
+  firefox:
+    needs: prepare
+    if: inputs.store != 'chrome'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verified-store-packages
+          path: store-release
+      - name: Submit listed Firefox version with reviewer source and release notes
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          AMO_ADDON_ID: maplescouter-enhancements@tomerh2001.github.io
+        run: node scripts/publish-stores.mjs firefox
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: firefox-submission
+          path: store-results/
+          if-no-files-found: ignore

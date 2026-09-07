@@ -11,3 +11,6 @@ work/*.json
 dist-extension/
 dist-extension-firefox/
 .claude/
+store-release/
+store-results/
+gha-creds-*.json

@@ -14,6 +14,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -56,3 +58,10 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "v$V" \
             --generate-notes
+
+  marketplaces:
+    needs: release
+    uses: ./.github/workflows/publish-stores.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit

@@ -1,22 +1,38 @@
 # MapleScouter Enhancements
 
-A Tampermonkey userscript / Chrome extension, formerly called MapleScouter English Fix, that makes [maplescouter.com](https://maplescouter.com) actually usable in English — full GMS-context translations, a character picker with auto-save and cloud sync for the Character page, quality-of-life fixes, and no ads.
+A Chrome extension, Firefox add-on, and Tampermonkey userscript for [maplescouter.com](https://maplescouter.com). It adds GMS English translations, saved characters, cloud sync, history, remembered language and server selections, and ad removal. Formerly called MapleScouter English Fix.
 
 MapleScouter (환산주스탯 계산기) is the best MapleStory stat-equivalence calculator around, but its English mode ships with **thousands of missing translations** and quite a few awkward, Google-Translate-style ones. This script fixes that — and much more.
 
 ## Install
 
-**Option A — Chrome extension (unpacked or Web Store):** download `maplescouter-en-fix-extension.zip` from the [latest release](https://github.com/tomerh2001/maplescouter-en-fix/releases), unzip, and load it via chrome://extensions → Developer mode → "Load unpacked" (works in Chrome/Arc/Edge). Store publication steps live in [extension/STORE.md](extension/STORE.md).
+**Chrome, Edge, or Arc:** install from the [Chrome Web Store](https://chromewebstore.google.com/detail/alopdmlliacajfcgnphmojmneanikbdg). Store installs update automatically.
 
-**Option B — Tampermonkey userscript:**
+**Firefox:** install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/maplescouter-enhancements/). Requires Firefox 140 or newer. Availability and updates depend on Mozilla's review status.
+
+**Tampermonkey:**
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (Chrome/Arc/Edge/Firefox/Safari).
 2. Click here: **[Install MapleScouter Enhancements](https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js)** — Tampermonkey will show an install prompt.
 3. Open [maplescouter.com](https://maplescouter.com). Done.
 
-**Option C, Firefox add-on:** download `maplescouter-en-fix-firefox.zip` from the [latest release](https://github.com/tomerh2001/maplescouter-en-fix/releases) and load it via about:debugging → This Firefox → "Load Temporary Add-on" (needs Firefox 140 or newer; a temporary add-on is removed when Firefox closes). The listed version on [addons.mozilla.org](https://addons.mozilla.org/firefox/addon/maplescouter-enhancements/) installs permanently and updates itself once the listing is approved. Steps for the listing live in [extension/STORE.md](extension/STORE.md).
+For development, download the matching ZIP from [GitHub Releases](https://github.com/tomerh2001/maplescouter-en-fix/releases/latest). Unzip the Chrome package and use **Load unpacked** in `chrome://extensions`. For Firefox, use **Load Temporary Add-on** in `about:debugging`; temporary installs are removed when Firefox closes.
 
-Updates: Tampermonkey → Utilities → *Check for userscript updates* (each release bumps the version, which also refreshes the translation data payload). Releases are published automatically on [GitHub Releases](https://github.com/tomerh2001/maplescouter-en-fix/releases).
+Tampermonkey checks for userscript updates automatically; you can also request a check from its dashboard. GitHub releases are available before marketplace reviews finish, so store versions may briefly lag behind.
+
+## Releases and store publishing
+
+GitHub Actions handles both stores. Bump `@version` in the userscript, rebuild, and push the release changes to `main`. The Release workflow creates the GitHub release, then calls [Publish marketplaces](https://github.com/tomerh2001/maplescouter-en-fix/actions/workflows/publish-stores.yml).
+
+The publishing workflow checks the released ZIPs against a fresh build of the release tag, then submits Chrome and Firefox independently. Firefox receives the source archive, build instructions, reviewer notes, and release notes as part of the submission.
+
+- **Chrome:** requests review with `DEFAULT_PUBLISH` and a 100% rollout. Google publishes the version after approval, without a second publish click.
+- **Firefox:** submits to the existing listing on the `listed` channel. Mozilla makes the approved version available through Firefox Add-ons.
+- **Retries:** an already published or pending version is not uploaded again. Failed jobs stay failed and explain which store needs attention. A different pending Chrome version is left untouched.
+
+To submit an existing release, open **Actions > Publish marketplaces > Run workflow**, enter a version such as `1.7.1`, and choose both stores or one store. Submission receipts and verified packages are saved as workflow artifacts. A successful job means the store accepted the submission or already has it; it does not promise review approval.
+
+Credentials are stored in GitHub Actions secrets, never in the extension packages. See [publishing setup and credential maintenance](extension/STORE.md#automated-publishing) for details.
 
 ## Features
 
