@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.7.1
+// @version      1.7.2
 // @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
@@ -1521,7 +1521,18 @@
     saveTimer: null, uploadTimer: null, pollTimer: null, pollDelay: POLL_MS, pendingImport: null, conflictToastKey: null, warnToastKey: null
   };
   function loadBindings() {
+    var previous = cloud.bindings;
     var b = lsJson(LS_CLOUD_SLOTS, {}); cloud.bindings = (b && typeof b === 'object' && !Array.isArray(b)) ? b : {};
+    Object.keys(cloud.bindings).forEach(function (k) {
+      var next = cloud.bindings[k];
+      Object.keys(previous).some(function (oldKey) {
+        var old = previous[oldKey], check = remoteCheck(old);
+        if (next && old && eqi(next.ign, old.ign) && next.cloudUpdatedAt === old.cloudUpdatedAt && next.remoteUpdatedAt === old.remoteUpdatedAt && check && !check.pending) {
+          remoteChecks.set(next, check); return true;
+        }
+        return false;
+      });
+    });
     var s = lsJson(LS_CLOUD_SELECTED, null); cloud.selected = (s && typeof s === 'object' && s.key) ? s : null;
   }
   function saveBindings() {
@@ -1665,11 +1676,13 @@
   function relTime(iso) {
     if (!iso) return 'never';
     var t = new Date(iso).getTime(); if (isNaN(t)) return '';
-    var d = Math.max(0, Date.now() - t), m = Math.round(d / 60000);
-    if (m < 1) return 'just now'; if (m < 60) return m + ' min ago';
-    var h = Math.round(m / 60); if (h < 48) return h + ' h ago';
-    var days = Math.round(h / 24); if (days < 30) return days + ' d ago';
-    return new Date(iso).toLocaleDateString();
+    var seconds = Math.floor(Math.max(0, Date.now() - t) / 1000);
+    if (!seconds) return 'just now';
+    var units = [[31536000, 'year'], [2592000, 'month'], [86400, 'day'], [3600, 'hour'], [60, 'minute'], [1, 'second']];
+    for (var i = 0; i < units.length; i++) {
+      var n = Math.floor(seconds / units[i][0]);
+      if (n) return n + ' ' + units[i][1] + (n === 1 ? '' : 's') + ' ago';
+    }
   }
   function dayDate(iso) { if (!iso) return ''; var t = new Date(iso); return isNaN(t.getTime()) ? '' : t.toLocaleDateString(); }
   function slotName(key, slot) {
@@ -1756,16 +1769,54 @@
   function busy(delta) { cloud.busy = Math.max(0, cloud.busy + delta); updateIcon(); }
   function cloudPath(ign) { return '/v1/characters/' + encodeURIComponent(String(ign)); } // the server lowercases the key
 
-  function checkRemote(key, cb) {
+  // Freshness belongs to this browser session, not the persisted sync baseline. A reload
+  // must check the server before showing green. Binding objects survive slot renumbering.
+  var remoteChecks = new WeakMap();
+  function remoteCheck(b) { return b ? remoteChecks.get(b) : null; }
+  function noteRemote(b, response) {
+    remoteChecks.set(b, { at: Date.now(), response: response, pending: false });
+  }
+  function refreshCloudUi() { updateIcon(); refreshPickerRows(); }
+  function checkRemote(key, cb, maxAge) {
     var b = cloud.bindings[key];
     if (!b || !b.ign || !cloudEnabled()) { if (cb) cb(null); return; }
-    cloudFetch('HEAD', cloudPath(b.ign)).then(function (r) {
-      if (r.status === 404) { b.remoteUpdatedAt = null; b.cloudUpdatedAt = null; }
-      // The server never issues an older updatedAt for the same key, so an ETag behind our last
-      // upload is a HEAD that landed after our own PUT: keep the newer stamp or the icon says "cloud is newer".
-      else if (r.ok && r.etag && (!b.cloudUpdatedAt || r.etag >= b.cloudUpdatedAt)) b.remoteUpdatedAt = r.etag;
-      saveBindings(); updateIcon(); if (cb) cb(r);
-    }, function () { updateIcon(); if (cb) cb(null); });
+    var old = remoteCheck(b), now = Date.now();
+    if (old && old.pending) { if (cb) old.callbacks.push(cb); return; }
+    // Reopening the list, focus + visibility events, and a form remount share one check.
+    // Failed checks also cool down; an explicit Retry click still goes straight through.
+    if (old && maxAge && now - old.at < Math.max(maxAge, old.retryMs || 0)) { if (cb) cb(old.response); return; }
+    var check = { at: now, pending: true, callbacks: cb ? [cb] : [] };
+    var baseline = b.cloudUpdatedAt, observed = b.remoteUpdatedAt;
+    remoteChecks.set(b, check); refreshCloudUi();
+    function finish(r) {
+      // A pull or upload completed while this HEAD was in flight. It is newer evidence,
+      // including when an old 404 arrives after the first successful upload.
+      if (remoteCheck(b) === check) {
+        if (b.cloudUpdatedAt === baseline && b.remoteUpdatedAt === observed) {
+          if (r && r.status === 404) { b.remoteUpdatedAt = null; b.cloudUpdatedAt = null; }
+          else if (r && r.ok && r.etag && (!b.cloudUpdatedAt || r.etag >= b.cloudUpdatedAt)) b.remoteUpdatedAt = r.etag;
+        }
+        check.at = Date.now(); check.pending = false; check.response = r;
+        check.retryMs = r && r.retryAfter ? r.retryAfter * 1000 : 0;
+        saveBindings();
+      }
+      refreshCloudUi();
+      check.callbacks.forEach(function (fn) { fn(r); });
+    }
+    cloudFetch('HEAD', cloudPath(b.ign)).then(finish, function () { finish(null); });
+  }
+  function refreshPickerCloud() {
+    if (!picker.open || document.hidden || !isInputRoute()) return;
+    var keys = picker.items.filter(function (it) { return it.type === 'local'; }).map(function (it) { return it.key; });
+    var next = 0, stopped = false;
+    function run() {
+      if (stopped || !picker.open || document.hidden || !isInputRoute() || next >= keys.length) return;
+      checkRemote(keys[next++], function (r) {
+        if (!r || (!r.ok && r.status !== 404)) { stopped = true; return; }
+        setTimeout(run, 0);
+      }, FOCUS_CHECK_GAP_MS);
+    }
+    run(); run(); // two small HEAD requests at a time, only for characters saved here
   }
   function fetchDoc(ign, cb) {
     busy(1);
@@ -1918,8 +1969,8 @@
     checkRemote(key, function (r) {
       var ok = !!r && (r.ok || r.status === 404);   // any other status (5xx, 429) backs off like a failed request
       cloud.pollDelay = ok ? POLL_MS : Math.min(POLL_MAX_MS, cloud.pollDelay * 2);
-      cloud.pollTimer = setTimeout(pollTick, cloud.pollDelay);
-    });
+      if (isInputRoute() && !document.hidden) startPolling();
+    }, FOCUS_CHECK_GAP_MS);
   }
 
   /* -- sync state ------------------------------------------------------------------------ */
@@ -1934,6 +1985,9 @@
     // A binding that was never uploaded can still know about a cloud copy (a HEAD 200 from the poll
     // or a 404 that cleared cloudUpdatedAt). Route it to the compare dialog, never to a blind upload.
     if (cloud.offline) return { state: 'offline', key: key, b: b };
+    var check = remoteCheck(b);
+    if ((check && check.pending) || (!check && b.cloudUpdatedAt)) return { state: 'checking', key: key, b: b };
+    if (check && (!check.response || (!check.response.ok && check.response.status !== 404))) return { state: 'offline', key: key, b: b };
     if (!b.cloudUpdatedAt) return b.remoteUpdatedAt ? { state: 'cloud-ahead', key: key, b: b } : { state: 'not-uploaded', key: key, b: b };
     var cloudChanged = !!(b.remoteUpdatedAt && b.remoteUpdatedAt !== b.cloudUpdatedAt);
     if (!localChanged && !cloudChanged) return { state: 'synced', key: key, b: b };
@@ -1947,6 +2001,7 @@
     'off':          { icon: 'cloud-off',      color: 'text-text-gray-low', title: 'Cloud sync is off.' },
     'not-uploaded': { icon: 'cloud-upload',   color: 'text-text-gray-low', title: 'Not in the cloud yet. Click to upload.' },
     'offline':      { icon: 'cloud-off',      color: 'text-red-500',       title: 'Cloud unavailable. Click to retry.' },
+    'checking':     { icon: 'loader',         color: 'text-text-gray-low', title: 'Checking cloud...' },
     'synced':       { icon: 'cloud-check',    color: 'text-green-600',     title: 'Synced with the cloud.' },
     'local-ahead':  { icon: 'cloud-alert',    color: 'text-amber-500',     title: 'Edited since the last upload. Click to upload.' },
     'cloud-ahead':  { icon: 'cloud-download', color: 'text-amber-500',     title: 'The cloud copy is newer. Click to choose.' },
@@ -1997,12 +2052,11 @@
   function updateIcon() {
     if (!picker.icon) return;
     var info = syncInfo(), st = ICON_STATES[info.state] || ICON_STATES.none;
-    var b = info.b, title = st.title;
+    var title = st.title;
     if (info.state === 'offline' && cloud.offlineReason === 'blocked') title = 'Cloud access was blocked. Your local saves still work. Click to retry.';
-    if (b && b.ign) title = title + (info.state === 'synced' && b.syncedAt ? ' Uploaded ' + relTime(b.syncedAt) + '.' : '');
     var busyNow = cloud.busy > 0;
     picker.icon.className = SOFT_BASE + ' msfix-sync ' + (busyNow ? 'text-text-gray-low' : st.color);
-    picker.icon.innerHTML = busyNow ? svgIcon('loader', 'animate-spin') : svgIcon(st.icon);
+    picker.icon.innerHTML = busyNow ? svgIcon('loader', 'animate-spin') : svgIcon(st.icon, info.state === 'checking' ? 'animate-spin' : '');
     var tipText = busyNow ? 'Working...' : title;
     picker.icon.setAttribute('data-msfix-tip', tipText); picker.icon.removeAttribute('title');
     picker.icon.setAttribute('aria-label', tipText);
@@ -2053,7 +2107,7 @@
     if (load && !loadIntoForm(key)) return false;
     renderTrigger(); updateIcon();
     if (!quiet) toastOk((load ? 'Loaded ' : 'Selected ') + slotName(key, slot));
-    if (b && b.ign) { cloud.pollDelay = POLL_MS; checkRemote(key); startPolling(); }
+    if (b && b.ign) { cloud.pollDelay = POLL_MS; checkRemote(key, null, FOCUS_CHECK_GAP_MS); startPolling(); }
     return true;
   }
   function deselect(reason) {
@@ -2182,6 +2236,7 @@
       syncedAt: doc ? nowIso() : null
     };
     if (cloud.selected && cloud.selected.key === key) cloud.selected.ign = ign;
+    if (doc) noteRemote(cloud.bindings[key], { ok: true, status: 200, etag: doc.updatedAt });
     saveBindings();
     moveHistory(oldHk, histKey(key));   // the slot's saves follow it under its IGN
   }
@@ -2258,8 +2313,9 @@
       if (r.ok) {
         var up = (r.json && r.json.updatedAt) || r.etag || nowIso();
         b.cloudUpdatedAt = up; b.remoteUpdatedAt = up; b.syncedHash = hashData(slot.data); b.syncedAt = nowIso();
+        noteRemote(b, { ok: true, status: 200, etag: up });
         pushHistory(key, 'upload', slot.data);
-        cloud.conflictToastKey = null; saveBindings(); updateIcon();
+        cloud.conflictToastKey = null; saveBindings(); refreshCloudUi();
         if (!opts.quiet) toastOk('Uploaded to the cloud');
         if (cb) cb(true);
       } else if (r.status === 409) {
@@ -2325,7 +2381,7 @@
     var diffs = []; if (o.localData && cloudData) leafDiff(o.localData, cloudData, '', diffs);
     msDialog({
       title: o.title,
-      subtitle: metaLine(cm) + ', updated ' + relTime(o.doc.updatedAt),
+      subtitle: metaLine(cm) + ', Cloud: ' + relTime(o.doc.updatedAt),
       build: function (body, close) {
         var av = o.ign ? cloudDialogAvatar(o.ign) : null;
         if (av) {
@@ -2387,6 +2443,7 @@
       case 'off': picker.input.focus(); openPicker(); toastOk('Cloud sync is off.'); return;
       case 'unlinked': openAddDialog(map[key] && IGN_RE.test(map[key].label || '') ? map[key].label : '', { linkKey: key }); return;
       case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r && (r.ok || r.status === 404)) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
+      case 'checking': return;
       case 'synced': checkRemote(key, function (r) { if (r && r.ok && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
       case 'not-uploaded':
         // Look first: the IGN may have been created elsewhere since the last check.
@@ -2444,7 +2501,7 @@
       compareDialog({
         title: st === 'conflict' || st === 'local-ahead' ? 'Changed here and in the cloud' : 'The cloud copy is newer',
         doc: doc, localData: slot.data,
-        yours: 'Yours: ' + metaLine(slotMeta(slot.data)) + ', edited ' + relTime(slot.savedAt),
+        yours: metaLine(slotMeta(slot.data)) + ', Local: ' + relTime(slot.savedAt),
         question: 'Load the cloud copy, or upload yours?',
         midLabel: 'Load cloud copy', onMid: function () { if (applyCloudDoc(key, doc)) toastOk('Loaded the cloud copy'); },
         goLabel: 'Upload mine', onGo: function () { b.cloudUpdatedAt = doc.updatedAt; saveBindings(); uploadSlot(key, { onConflict: function () { openUploadConflict(key); } }); }
@@ -2520,7 +2577,7 @@
   function openExistsLocally(ign, key, localData) {
     var map = presetMap(), slot = map[key]; if (!slot) return;
     var b = cloud.bindings[key];
-    msDialog({ title: 'Already saved here', subtitle: metaLine(slotMeta(slot.data)) + ', saved ' + relTime(slot.savedAt), build: function (body, close) {
+    msDialog({ title: 'Already saved here', subtitle: metaLine(slotMeta(slot.data)) + ', Local: ' + relTime(slot.savedAt), build: function (body, close) {
       var row = el('div', 'flex w-full gap-2');
       var mk = function (label, cls, fn) { var x = el('button', cls, label); x.type = 'button'; x.addEventListener('click', function () { close(); if (fn) fn(); }); row.appendChild(x); return x; };
       mk('Cancel', CLS.ghost, null);
@@ -2926,10 +2983,13 @@
     picker.open = true; picker.filter = ''; picker.active = -1;
     picker.input.value = ''; picker.input.setAttribute('aria-expanded', 'true');
     renderTrigger(); picker.dd.hidden = false; renderDropdown();
+    refreshPickerCloud();
+    picker.timeTimer = setInterval(function () { if (!document.hidden) refreshPickerRows(); }, 1000);
     avatarWarm();   // the one place the list asks for looks it does not have yet
   }
   function closePicker() {
     if (!picker.dd || !picker.open) return;
+    if (picker.timeTimer) { clearInterval(picker.timeTimer); picker.timeTimer = null; }
     picker.open = false; picker.filter = ''; picker.active = -1;
     picker.dd.hidden = true; picker.input.setAttribute('aria-expanded', 'false'); picker.input.removeAttribute('aria-activedescendant');
     renderTrigger();
@@ -2998,7 +3058,9 @@
     var col = el('div', 'flex min-w-0 flex-1 flex-col items-start gap-0.5'); d.appendChild(col);
     var top = el('div', 'flex w-full items-center gap-2');
     var m = el('span', 'min-w-0 flex-1 truncate ' + (selected ? 'font-semibold' : 'font-medium'), main); m.title = main; top.appendChild(m);
-    (badges || []).forEach(function (k) { top.appendChild(badge(k)); });
+    var chips = el('span', 'msfix-location-badges flex shrink-0 gap-1');
+    (badges || []).forEach(function (k) { chips.appendChild(badge(k)); });
+    top.appendChild(chips);
     if (menuKey) {
       var kb = el('button', 'msfix-row-menu shrink-0 rounded-sm p-0.5 text-text-gray-low hover:bg-surface-gray-surface-2 hover:text-text-gray-high'); kb.type = 'button';
       kb.setAttribute('data-msfix-act', 'menu'); kb.setAttribute('data-msfix-key', menuKey); kb.setAttribute('aria-label', 'Actions for ' + main); kb.title = 'More actions';
@@ -3006,8 +3068,34 @@
     }
     col.appendChild(top);
     if (sub1) col.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub1));
-    if (sub2) col.appendChild(el('span', 'text-text-gray-low w-full text-xs break-words', sub2));
+    if (sub2) col.appendChild(el('span', 'msfix-save-times text-text-gray-low w-full text-xs break-words', sub2));
     return d;
+  }
+  function saveTimes(slot, b) {
+    var text = 'Local: ' + (slot.savedAt ? relTime(slot.savedAt) : 'unknown');
+    if (!b || !b.ign) return text;
+    var check = remoteCheck(b), remote = b.remoteUpdatedAt || b.cloudUpdatedAt;
+    if ((check && check.pending) || (!check && remote)) return text + ', Cloud: checking...';
+    if (cloud.offline || (check && (!check.response || (!check.response.ok && check.response.status !== 404)))) return text + ', Cloud: unavailable';
+    return text + ', Cloud: ' + (remote ? relTime(remote) : 'not uploaded');
+  }
+  function refreshPickerRows() {
+    if (!picker.open) return;
+    var map = presetMap();
+    picker.items.forEach(function (it) {
+      if (it.type !== 'local' || !it.el || !map[it.key]) return;
+      var b = cloud.bindings[it.key], text = saveTimes(map[it.key], b);
+      var stamp = it.el.querySelector('.msfix-save-times');
+      if (stamp && stamp.textContent !== text) stamp.textContent = text;
+      var chips = it.el.querySelector('.msfix-location-badges');
+      if (chips) {
+        var inCloud = !!(b && (b.remoteUpdatedAt || b.cloudUpdatedAt));
+        if (chips.children.length !== (inCloud ? 2 : 1)) {
+          chips.replaceChildren(badge('local'));
+          if (inCloud) chips.appendChild(badge('cloud'));
+        }
+      }
+    });
   }
   function renderDropdown() {
     if (!picker.dd || !picker.open) return;
@@ -3027,8 +3115,8 @@
       var b = cloud.bindings[k], m = slotMeta(s.data), name = slotName(k, s);
       if (b && b.ign && ql && b.ign.toLowerCase() === ql) typedIsLocal = true;
       if (!match([name, s.label, b && b.ign, m.classEn, m.classKo])) return;
-      var inCloud = !!(b && b.ign && b.cloudUpdatedAt);
-      var when = 'Saved ' + relTime(s.savedAt) + (inCloud ? ', cloud copy ' + relTime(b.remoteUpdatedAt || b.cloudUpdatedAt) : '');
+      var inCloud = !!(b && b.ign && (b.remoteUpdatedAt || b.cloudUpdatedAt));
+      var when = saveTimes(s, b);
       dd.appendChild(addItem({ type: 'local', key: k }, optionEl(picker.items.length, name, metaLine(m), when, inCloud ? ['local', 'cloud'] : ['local'], k === sel, k, b && b.ign ? b.ign : '')));
       rows++;
     });
@@ -3061,7 +3149,7 @@
   // every panel remount (loadDraft & co.), from the housekeeping interval and on navigation.
   function ensureCharPicker() {
     applyRouteGate();
-    if (!isInputRoute()) { if (picker.el && picker.el.parentNode) unmountPicker(); return false; }
+    if (!isInputRoute()) { cloud.inputActive = false; if (picker.el && picker.el.parentNode) unmountPicker(); return false; }
     var row = nativePresetRow(); if (!row) return false;
     var header = row.parentElement; if (!header) return false;
     if (!ensureSubscriptions()) return false;
@@ -3073,7 +3161,8 @@
     }
     header.appendChild(picker.el);
     reconcileBindings(); renderTrigger(); updateIcon(); if (picker.open) renderDropdown();
-    startPolling();
+    if (!cloud.inputActive) { cloud.inputActive = true; pollTick(true); }
+    else startPolling();
     return true;
   }
   function schedulePickerMount() {
@@ -3126,7 +3215,7 @@
       if (document.hidden) { stopPolling(); return; }
       var now = Date.now();
       if (now - (cloud.lastFocusCheck || 0) < FOCUS_CHECK_GAP_MS) { startPolling(); return; }
-      cloud.lastFocusCheck = now; if (!cloud.offline) cloud.pollDelay = POLL_MS; pollTick(true);   // while offline, one probe now but keep the backed-off delay
+      cloud.lastFocusCheck = now; if (picker.open) refreshPickerCloud(); if (!cloud.offline) cloud.pollDelay = POLL_MS; pollTick(true);   // while offline, one probe now but keep the backed-off delay
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
@@ -3179,6 +3268,7 @@
     saveLocale();
     backupRegion();
     applyRouteGate();
+    if (!isInputRoute()) { cloud.inputActive = false; unmountPicker(); }
     schedulePickerMount();
     if (document.body && pathLocale() === 'en') {
       setTimeout(function () { sweepTree(document.body); }, 50);

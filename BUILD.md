@@ -30,6 +30,6 @@ node --test test/cloud-connectivity.test.cjs
 node --test test/publish-stores.test.mjs
 ```
 
-These tests cover blocked cloud requests, CORS failures, recovery, independent avatar failures, and preserving a character's region on load. They use Node built-ins and do not contact the cloud service or change saved characters.
+These tests cover blocked cloud requests, CORS failures, recovery, independent avatar failures, and preserving a character's region on load. They also cover cloud freshness on page entry, dropdown refreshes, request deduplication, upload races, and relative time units from seconds to years. They use Node built-ins and do not contact the cloud service or change saved characters.
 
 The publishing tests cover both store APIs with simulated responses, including validation errors, retry behavior, source attachment, and automatic publication after approval. They never upload to a real marketplace. The real release packages are verified separately by `scripts/prepare-store-release.py` against a build from the release tag.
