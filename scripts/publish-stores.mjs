@@ -47,7 +47,7 @@ export async function chromeToken(credentials, fetchImpl = fetch) {
 }
 
 const versionsOf = revision => (revision?.distributionChannels || []).map(channel => channel.crxVersion).filter(Boolean);
-export async function publishChrome({ version, publisherId, itemId, token, zip, fetchImpl = fetch, sleep = delay, attempts = 36 }) {
+export async function publishChrome({ version, publisherId, itemId, token, zip, replacePending = false, fetchImpl = fetch, sleep = delay, attempts = 36 }) {
   checkVersion(version);
   if (!/^[a-z]{32}$/.test(itemId) || !/^[a-zA-Z0-9-]+$/.test(publisherId)) throw new Error('Invalid Chrome publisher or item ID');
   const name = `publishers/${publisherId}/items/${itemId}`;
@@ -61,7 +61,12 @@ export async function publishChrome({ version, publisherId, itemId, token, zip, 
   const submittedVersions = versionsOf(submitted);
   if (submitted?.state === 'PENDING_REVIEW') {
     if (submittedVersions.includes(version)) return { store: 'chrome', version, state: 'PENDING_REVIEW', existing: true };
-    throw new Error('Chrome has another version awaiting review; it was left untouched');
+    if (!replacePending || !submittedVersions.length || !submittedVersions.every(v => compareVersions(v, version) < 0)) {
+      throw new Error('Chrome has another version awaiting review; it was left untouched');
+    }
+    await call('cancelSubmission', { method: 'POST' });
+    const cancelled = await call('fetchStatus');
+    if (cancelled.submittedItemRevisionStatus?.state === 'PENDING_REVIEW') throw new Error('Chrome cancellation is not confirmed; retry after checking the dashboard');
   }
   if (submittedVersions.some(v => compareVersions(v, version) > 0)) throw new Error('Chrome already has a newer submission');
   if (submittedVersions.includes(version) && submitted?.state === 'REJECTED') throw new Error('Chrome rejected this version; address the review before resubmitting');
@@ -134,7 +139,7 @@ async function main() {
   let result;
   if (store === 'chrome') {
     const credentials = JSON.parse(required('CWS_SERVICE_ACCOUNT_JSON'));
-    result = await publishChrome({ version, publisherId: required('CWS_PUBLISHER_ID'), itemId: required('CWS_EXTENSION_ID'), token: await chromeToken(credentials), zip: await readFile(`${dir}/maplescouter-en-fix-extension.zip`) });
+    result = await publishChrome({ version, publisherId: required('CWS_PUBLISHER_ID'), itemId: required('CWS_EXTENSION_ID'), token: await chromeToken(credentials), replacePending: process.env.CWS_REPLACE_PENDING === 'true', zip: await readFile(`${dir}/maplescouter-en-fix-extension.zip`) });
   } else if (store === 'firefox') {
     result = await publishFirefox({ version, addonId: required('AMO_ADDON_ID'), key: required('AMO_JWT_ISSUER'), secret: required('AMO_JWT_SECRET'), zip: await readFile(`${dir}/maplescouter-en-fix-firefox.zip`), source: await readFile(`${dir}/maplescouter-en-fix-source.zip`), notes: await readFile(`${dir}/release-notes.txt`, 'utf8') });
   } else throw new Error('Choose chrome or firefox');

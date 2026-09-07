@@ -130,3 +130,26 @@ test('store errors do not print response bodies containing credentials', async (
   const m = mock([{ path: ':fetchStatus', status: 403, body: { secret: 'do-not-log-me' } }]);
   await assert.rejects(publishChrome({ ...chrome, fetchImpl: m.fetchImpl }), error => !error.message.includes('do-not-log-me') && error.message.includes('HTTP 403')); m.complete();
 });
+
+test('explicit replacement cancels only the older Chrome review before uploading', async () => {
+  const m = mock([
+    { path: ':fetchStatus', body: { submittedItemRevisionStatus: revision('1.7.0', 'PENDING_REVIEW') } },
+    { path: ':cancelSubmission', method: 'POST', body: {} },
+    { path: ':fetchStatus', body: {} },
+    { path: ':upload', method: 'POST', body: { crxVersion: version, uploadState: 'SUCCEEDED' } },
+    { path: ':publish', method: 'POST', body: { state: 'PENDING_REVIEW' } },
+  ]);
+  await publishChrome({ ...chrome, replacePending: true, fetchImpl: m.fetchImpl }); m.complete();
+});
+test('replacement never cancels a newer pending Chrome version', async () => {
+  const m = mock([{ path: ':fetchStatus', body: { submittedItemRevisionStatus: revision('1.8.0', 'PENDING_REVIEW') } }]);
+  await assert.rejects(publishChrome({ ...chrome, replacePending: true, fetchImpl: m.fetchImpl }), /another version/); m.complete();
+});
+test('upload waits for confirmed cancellation', async () => {
+  const m = mock([
+    { path: ':fetchStatus', body: { submittedItemRevisionStatus: revision('1.7.0', 'PENDING_REVIEW') } },
+    { path: ':cancelSubmission', method: 'POST', body: {} },
+    { path: ':fetchStatus', body: { submittedItemRevisionStatus: revision('1.7.0', 'PENDING_REVIEW') } },
+  ]);
+  await assert.rejects(publishChrome({ ...chrome, replacePending: true, fetchImpl: m.fetchImpl }), /not confirmed/); m.complete();
+});
