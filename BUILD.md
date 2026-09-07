@@ -22,3 +22,11 @@ Outputs:
 - `msfix-data.js` is `window.__MSFIX_DATA__ = {...}`: the JSON translation tables from `data/` (i18n patch, dictionary, regex rules, CSS fixes) assigned to one global. It is data, not transpiled or minified code.
 - `maplescouter-en-fix.js` inside the extension is `src/maplescouter-en-fix.user.js` with the `==UserScript==` header removed. Nothing else is transformed.
 - `manifest.json` is `extension/manifest.json` with the version copied from the userscript `@version`, plus the gecko block for the Firefox build.
+
+## Focused regression tests
+
+```bash
+node --test test/cloud-connectivity.test.cjs
+```
+
+These tests cover blocked cloud requests, CORS failures, recovery, independent avatar failures, and preserving a character's region on load. They use Node built-ins and do not contact the cloud service or change saved characters.

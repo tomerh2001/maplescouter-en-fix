@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.7.0
+// @version      1.7.1
 // @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
@@ -9,7 +9,7 @@
 // @match        https://www.maplescouter.com/*
 // @run-at       document-start
 // @grant        none
-// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.7.0
+// @require      https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/msfix-data.js?v=1.7.1
 // @updateURL    https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @downloadURL  https://raw.githubusercontent.com/tomerh2001/maplescouter-en-fix/main/dist/maplescouter-en-fix.user.js
 // @supportURL   https://github.com/tomerh2001/maplescouter-en-fix/issues
@@ -126,7 +126,7 @@
   }
 
   /* -- site stores, captured passively as webpack executes each module (no forced requires) */
-  var siteRefs = { manualStore: null, presetStore: null, toast: null, enBundle: null, defaultUserStat: null };
+  var siteRefs = { manualStore: null, presetStore: null, regionStore: null, toast: null, enBundle: null, defaultUserStat: null };
   // Test hook: with localStorage msfix:debug=1 the discovered refs are mirrored on window so an
   // end-to-end harness can drive the same stores we use, instead of force-requiring site modules.
   var DEBUG_REFS = false;
@@ -147,6 +147,7 @@
         if (!siteRefs.defaultUserStat && looksLikeUserStat(v)) siteRefs.defaultUserStat = v;
         if (typeof v.getState === 'function' && typeof v.subscribe === 'function') {
           var st = v.getState();
+          if (st && !siteRefs.regionStore && typeof st.region === 'string' && typeof st.setRegion === 'function') siteRefs.regionStore = v;
           if (st && !siteRefs.presetStore && st.preset && typeof st.setPreset === 'function' && typeof st.deletePreset === 'function') siteRefs.presetStore = v;
           if (st && !siteRefs.manualStore && ('draftStat' in st) && typeof st.loadDraft === 'function' && typeof st.setDraftStat === 'function') siteRefs.manualStore = v;
         }
@@ -1702,10 +1703,12 @@
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
   /* -- network (all failures are soft: the icon goes "offline", nothing else breaks) ----- */
-  function setOffline(flag) {
-    if (cloud.offline === flag) return;
+  function setOffline(flag, reason) {
+    reason = flag ? (reason || 'network') : '';
+    if (cloud.offline === flag && cloud.offlineReason === reason) return;
     cloud.offline = flag;
-    if (flag) toastErr('Cloud unavailable. Working offline.');
+    cloud.offlineReason = reason;
+    if (flag) toastErr(reason === 'blocked' ? 'Cloud access was blocked. Your local saves still work.' : 'Cloud unavailable. Your local saves still work.');
     updateIcon(); renderDropdown();
   }
   function cloudFetch(method, path, opts) {
@@ -1719,25 +1722,35 @@
       var init = { method: method, headers: headers, mode: 'cors', cache: 'no-store' };
       if (opts.body) init.body = JSON.stringify(opts.body);
       if (ctrl) init.signal = ctrl.signal;
+      var failed = function (status, reason) {
+        clearTimeout(timer);
+        // An avatar failure is independent of character sync, including CORS and timeouts.
+        if (opts.soft) { resolve({ status: status || 0, ok: false, json: null, etag: '', retryAfter: 0 }); return; }
+        setOffline(true, reason);
+        reject({ offline: true, status: status || 0, reason: reason || 'network' });
+      };
       var done = function (res, json) {
         clearTimeout(timer); // cleared here, not at headers time, so the abort timer also covers a stalled body read
-        setOffline(false);
+        if (!opts.soft) setOffline(false);
         var etag = (res.headers.get('ETag') || '').replace(/^W\//, '').replace(/"/g, '');
         var retryAfter = parseInt(res.headers.get('Retry-After') || '', 10);
         resolve({ status: res.status, ok: res.ok, json: json, etag: etag, retryAfter: retryAfter > 0 ? retryAfter : 0 });
       };
       fetch(cloudUrl() + path, init).then(function (res) {
-        // A gateway error (502/503/504, Cloudflare 52x/53x) means the backend is down: treat it like a network failure.
-        // With opts.soft it resolves as a plain failed response instead (the avatar route answers 502 when Nexon
-        // is down, which says nothing about the cloud), leaving cloud.offline untouched either way.
-        if (res.status === 502 || res.status === 503 || res.status === 504 || res.status >= 520) {
-          clearTimeout(timer);
-          if (opts.soft) { resolve({ status: res.status, ok: false, json: null, etag: '', retryAfter: 0 }); return; }
-          setOffline(true); reject({ offline: true, status: res.status }); return;
+        // A firewall response is not a successful sync check, even when it has CORS headers.
+        if (res.status === 401 || res.status === 403) { failed(res.status, 'blocked'); return; }
+        if (res.status >= 500) { failed(res.status); return; }
+        if (method === 'HEAD') {
+          if (res.ok && !res.headers.get('ETag')) { failed(res.status, 'response'); return; }
+          done(res, null); return;
         }
-        if (method === 'HEAD' || res.status === 204) { done(res, null); return; }
-        res.text().then(function (t) { var j = null; try { j = t ? JSON.parse(t) : null; } catch (e) {} done(res, j); }, function () { done(res, null); });
-      }, function (err) { clearTimeout(timer); setOffline(true); reject({ offline: true, error: err }); });
+        if (res.status === 204) { done(res, null); return; }
+        res.text().then(function (t) {
+          var j = null; try { j = t ? JSON.parse(t) : null; } catch (e) {}
+          if (res.ok && (!j || typeof j !== 'object')) { failed(res.status, 'response'); return; }
+          done(res, j);
+        }, function () { failed(res.status); });
+      }, function () { failed(0); });
     });
   }
   function busy(delta) { cloud.busy = Math.max(0, cloud.busy + delta); updateIcon(); }
@@ -1920,8 +1933,8 @@
     var localChanged = !b.syncedHash || (!!h && h !== b.syncedHash);
     // A binding that was never uploaded can still know about a cloud copy (a HEAD 200 from the poll
     // or a 404 that cleared cloudUpdatedAt). Route it to the compare dialog, never to a blind upload.
-    if (!b.cloudUpdatedAt) return b.remoteUpdatedAt ? { state: 'cloud-ahead', key: key, b: b } : { state: 'not-uploaded', key: key, b: b };
     if (cloud.offline) return { state: 'offline', key: key, b: b };
+    if (!b.cloudUpdatedAt) return b.remoteUpdatedAt ? { state: 'cloud-ahead', key: key, b: b } : { state: 'not-uploaded', key: key, b: b };
     var cloudChanged = !!(b.remoteUpdatedAt && b.remoteUpdatedAt !== b.cloudUpdatedAt);
     if (!localChanged && !cloudChanged) return { state: 'synced', key: key, b: b };
     if (localChanged && !cloudChanged) return { state: 'local-ahead', key: key, b: b };
@@ -1985,6 +1998,7 @@
     if (!picker.icon) return;
     var info = syncInfo(), st = ICON_STATES[info.state] || ICON_STATES.none;
     var b = info.b, title = st.title;
+    if (info.state === 'offline' && cloud.offlineReason === 'blocked') title = 'Cloud access was blocked. Your local saves still work. Click to retry.';
     if (b && b.ign) title = title + (info.state === 'synced' && b.syncedAt ? ' Uploaded ' + relTime(b.syncedAt) + '.' : '');
     var busyNow = cloud.busy > 0;
     picker.icon.className = SOFT_BASE + ' msfix-sync ' + (busyNow ? 'text-text-gray-low' : st.color);
@@ -1998,10 +2012,31 @@
   }
 
   /* -- selection / loading --------------------------------------------------------------- */
+  function regionForPreset(d) {
+    // Region is part of the preset. Require a complete, unambiguous set of flags before switching.
+    var flags = { isGMS: 'gms', isTMS: 'tms', isJMS: 'jms', isMSEA: 'msea' }, region = 'kms', count = 0;
+    for (var k in flags) {
+      if (!d || typeof d[k] !== 'boolean') return null;
+      if (d[k]) { region = flags[k]; count++; }
+    }
+    return count <= 1 ? region : null;
+  }
   function loadIntoForm(key) {
     var s = cloudStores(), slot = presetMap()[key];
     if (!s || !slot || !slot.data) return false;
     var d = clone(slot.data);
+    var region = regionForPreset(d);
+    if (region) {
+      var rs = siteRefs.regionStore && siteRefs.regionStore.getState();
+      var current = rs ? rs.region : (readSiteRegion() || {}).region;
+      if (current !== region) {
+        if (!rs || typeof rs.setRegion !== 'function') { toastErr('Choose ' + region.toUpperCase() + ' in the header, then load the character again.'); return false; }
+        // loadDraft remounts the site's form. Its mount effect copies the header's region into
+        // the draft, so update the real store first or a fresh KMS browser rewrites a GMS preset.
+        rs.setRegion(region);
+        backupRegion();
+      }
+    }
     cloud.lastLoaded = d;
     try { s.ms.getState().loadDraft(d); } catch (e) { toastErr('Could not load the character'); return false; }
     return true;
@@ -2351,8 +2386,8 @@
       case 'none': picker.input.focus(); openPicker(); return;
       case 'off': picker.input.focus(); openPicker(); toastOk('Cloud sync is off.'); return;
       case 'unlinked': openAddDialog(map[key] && IGN_RE.test(map[key].label || '') ? map[key].label : '', { linkKey: key }); return;
-      case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
-      case 'synced': checkRemote(key, function (r) { if (r && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
+      case 'offline': cloud.pollDelay = POLL_MS; checkRemote(key, function (r) { if (r && (r.ok || r.status === 404)) toastOk('Cloud is back'); else toastErr('Still offline'); }); return;
+      case 'synced': checkRemote(key, function (r) { if (r && r.ok && syncInfo().state === 'synced') toastOk(b.ign + ' is up to date'); }); return;
       case 'not-uploaded':
         // Look first: the IGN may have been created elsewhere since the last check.
         fetchDoc(b.ign, function (err, doc) {

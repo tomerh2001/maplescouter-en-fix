@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test cloud connectivity and preset loading
+        run: node --test test/cloud-connectivity.test.cjs
+
       - name: Extract userscript version
         id: ver
         run: |
