@@ -1,4 +1,4 @@
-/* MapleScouter English Fix — UI polish for longer English strings */
+/* MapleScouter Enhancements: UI polish for longer English strings */
 
 /* Stat-input labels (input/result forms): the site truncates at ~105px which
    cuts off English terms ("Cooldown Red..."). Let them wrap to two lines. */
@@ -62,4 +62,28 @@ img[alt^="hexa" i], img[alt^="HEXA" i] {
   font-size: 0 !important;
   text-indent: -9999px !important;
   overflow: hidden !important;
+}
+
+/* The new stat quiz uses 48px Korean equipment buttons. Give the English labels
+   two lines and let all five columns fit the card, including on phones. */
+html[data-msfix-route="spec-quiz"] main div:has(> .grid.grid-cols-5.grid-rows-6) {
+  width: 390px;
+  max-width: 100%;
+  min-width: 0;
+}
+html[data-msfix-route="spec-quiz"] main .grid.grid-cols-5.grid-rows-6 {
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+html[data-msfix-route="spec-quiz"] main .grid.grid-cols-5.grid-rows-6 button.h-12.w-12 {
+  width: 100%;
+  height: 64px;
+}
+html[data-msfix-route="spec-quiz"] main .grid.grid-cols-5.grid-rows-6 button > span.truncate {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  font-size: 10px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
 }

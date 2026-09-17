@@ -8,6 +8,7 @@ const read = (p) => JSON.parse(fs.readFileSync(path.join(root, p), 'utf8'));
 
 const i18nPatch = read('data/i18n-patch.json');
 const dict = read('data/dictionary.json');
+require('./scripts/translation-overrides.cjs').applyTranslationOverrides(i18nPatch, dict);
 const rules = read('data/rules.json');
 const css = fs.readFileSync(path.join(root, 'data/ui-fixes.css'), 'utf8');
 

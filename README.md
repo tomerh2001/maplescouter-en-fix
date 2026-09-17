@@ -34,10 +34,16 @@ To submit an existing release, open **Actions > Publish marketplaces > Run workf
 
 Credentials are stored in GitHub Actions secrets, never in the extension packages. See [publishing setup and credential maintenance](extension/STORE.md#automated-publishing) for details.
 
+## Weekly maintenance
+
+A weekly audit checks MapleScouter for new text, changed pages, and layout or compatibility problems. It runs on Thursdays at 10:00 (Asia/Jerusalem). Updates are tested, released on GitHub, and submitted to both Chrome and Firefox. The stores publish approved updates automatically. If nothing needs changing, no new version is uploaded.
+
+See the [maintenance runbook](docs/WEEKLY-MAINTENANCE.md) and [audit reports](docs/audits/). Version 1.7.3 adds the September site translations, readable equipment labels in the new stat quiz, and a fix for English results reverting to Korean.
+
 ## Features
 
 ### Translations
-- **~4,500 missing translations added.** Every UI string that shipped Korean-only in English mode — menus, simulators, boss tables, tooltips, toasts — translated with proper Global MapleStory terminology (researched against official GMS names, not machine-translated).
+- **Thousands of translations added.** UI text that shipped Korean-only in English mode — menus, simulators, boss tables, tooltips, toasts — translated with proper Global MapleStory terminology (researched against official GMS names, not machine-translated).
 - **~55,000 official item/monster/map names**, built by joining KMS and GMS game data by ID, so equipment and drops from the Nexon API display *official* GMS names (몽환의 벨트 → Dreamy Belt, 어센틱심볼 → Sacred Symbol).
 - **Fixes literal/Konglish translations** the site already had — "Boss Cut" → "Boss Clear Spec", "Hunting Cut" → "Farming Spec", "Doping" → "Consumables & Buffs", "Authentic Symbol" → "Sacred Symbol", "Union" → "Legion", and hundreds more.
 - **Full official stat names** on input forms: Attack Power, Magic Attack, Critical Rate, Boss Damage + Damage — no cryptic abbreviations.
@@ -81,7 +87,7 @@ The site's **Load Preset / Save Preset** buttons and the IGN search on `/input` 
 
 | Layer | What it does |
 |---|---|
-| **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~5,600 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
+| **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~6,400 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
 | **DOM dictionary** | A `MutationObserver` + exact-match KO→EN dictionary (official game-data join) for text that's hardcoded or arrives from the API at runtime, plus pattern rules for dynamic strings (Korean number units 억/만, dates, burst-window notation like 3극 4준). |
 | **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, preset import/overwrite — all in the userscript core. |
 | **Characters & cloud** | Drives the site's own zustand stores (`manual-store` = the form's draft, `preset` = the slots), captured while webpack executes them, so loads and auto-saves need no reload. Slot↔IGN links live in `localStorage` (`msfix:cloud:*`); the backend is a small file-backed JSON API ([maplescouter-cloud](https://github.com/tomerh2001/maplescouter-cloud)) reached with plain `fetch` + `If-Match` for conflict detection. Character looks come from `GET scouter.tomerh2001.com/v1/avatar/:ign`, which proxies Nexon's public GMS ranking API (the site cannot call it directly: no CORS) and caches each answer for a day; the browser keeps its own copy in `localStorage` (`msfix:cloud:avatars`, hits for 7 days, misses for 1 day) and loads the picture straight from Nexon's avatar image host. Set `localStorage.msfix:cloud:url` to point the script at another backend (e.g. a local one for testing). |

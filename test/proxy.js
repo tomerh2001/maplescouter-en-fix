@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const PORT = 8787;
+const PORT = Number(process.env.PORT || 8787);
 const SITE = 'maplescouter.com';
 const API = 'api.maplescouter.com';
 const DIST = path.join(__dirname, '..', 'dist');
@@ -54,6 +54,16 @@ const server = http.createServer((req, res) => {
       return;
     }
     // 2. API tunnel
+    // Optional immutable assets from the live audit. Avoid Cloudflare returning an HTML
+    // challenge for a script when testing many pages through one local connection.
+    if (process.env.MSFIX_AUDIT_CACHE === '1' && /^\/_next\/static\/chunks\/.+\.js$/.test(req.url)) {
+      const cached = path.join(__dirname, '..', 'work', 'chunks', path.basename(req.url));
+      if (fs.existsSync(cached)) {
+        res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8' });
+        res.end(fs.readFileSync(cached, 'utf8').split('https://' + API).join('/__api'));
+        return;
+      }
+    }
     const isApi = req.url.startsWith('/__api/');
     const host = isApi ? API : SITE;
     fetchUpstream(host, req, bodyChunks, (up, err, late) => {

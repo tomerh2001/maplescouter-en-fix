@@ -19,6 +19,7 @@ Outputs:
 - `dist/maplescouter-en-fix.user.js` and `dist/msfix-data.js` (Tampermonkey)
 
 ## What is generated
+- `scripts/translation-overrides.cjs` applies reviewed `data/overrides/*.json` entries after the original tables. This helper is included in the reviewer source archive.
 - `msfix-data.js` is `window.__MSFIX_DATA__ = {...}`: the JSON translation tables from `data/` (i18n patch, dictionary, regex rules, CSS fixes) assigned to one global. It is data, not transpiled or minified code.
 - `maplescouter-en-fix.js` inside the extension is `src/maplescouter-en-fix.user.js` with the `==UserScript==` header removed. Nothing else is transformed.
 - `manifest.json` is `extension/manifest.json` with the version copied from the userscript `@version`, plus the gecko block for the Firefox build.
@@ -26,10 +27,11 @@ Outputs:
 ## Focused regression tests
 
 ```bash
-node --test test/cloud-connectivity.test.cjs
-node --test test/publish-stores.test.mjs
+node --test test/*.test.*
 ```
 
 These tests cover blocked cloud requests, CORS failures, recovery, independent avatar failures, and preserving a character's region on load. They also cover cloud freshness on page entry, dropdown refreshes, request deduplication, upload races, and relative time units from seconds to years. They use Node built-ins and do not contact the cloud service or change saved characters.
 
 The publishing tests cover both store APIs with simulated responses, including validation errors, retry behavior, source attachment, and automatic publication after approval. They never upload to a real marketplace. The real release packages are verified separately by `scripts/prepare-store-release.py` against a build from the release tag.
+
+Translation tests check numeric values and probability tables, interpolation, GMS skill names, dynamic labels, and language persistence. Audit dependencies are separate from the dependency-free extension build; see [weekly maintenance](docs/WEEKLY-MAINTENANCE.md).

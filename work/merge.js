@@ -298,6 +298,7 @@ const FORCE = {
   '버튼을 눌러 보스컷을 확인하시기 바랍니다.': 'button. Press it to view an adjusted Boss Clear Spec.',
 };
 for (const [k, v] of Object.entries(FORCE)) { dict[k] = v; i18nPatch[k] = v; }
+require('../scripts/translation-overrides.cjs').applyTranslationOverrides(i18nPatch, dict);
 // also override the site's own en.json values (rendered via i18next) if the keys differ there
 i18nPatch['내실메이커'] = 'Core Skills Maker';
 i18nPatch['내실'] = 'Core Skills';

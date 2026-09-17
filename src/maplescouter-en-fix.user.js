@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.7.2
+// @version      1.7.3
 // @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
@@ -52,26 +52,35 @@
     if (loc) { try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {} }
   }
 
+  // Only the language menu changes the preference. Locale-free links and reloads
+  // can otherwise silently turn /en/input -> /ko/result into a new preference.
+  function navigationLocale(previousPath, nextPath, saved) {
+    var next = pathLocale(nextPath);
+    if (!saved || LOCALES.indexOf(saved) === -1) return next;
+    return saved;
+  }
+
+  function rememberLanguageChoice(e) {
+    var item = e.target && e.target.closest && e.target.closest('[role="menuitemcheckbox"], [role="menuitem"]');
+    if (!item || !item.closest('[role="menu"]')) return;
+    var loc = ({ Korean: 'ko', English: 'en', Japanese: 'ja', Chinese: 'ch' })[item.textContent.trim()];
+    if (loc) { try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {} }
+  }
+
   // The site 307-redirects every fresh visit to /ko before any client script runs,
-  // so we can never observe the unprefixed URL. Instead we use the referrer to tell
-  // user intent apart from the forced default:
-  //   - same-origin referrer  → in-site navigation (incl. the language switcher):
-  //     record the locale as the user's choice.
-  //   - external/empty referrer → fresh entry: if the remembered language differs
-  //     from the URL, redirect to the remembered one.
+  // so we can never observe the unprefixed URL. Restore the saved choice before
+  // boot. The language menu records deliberate changes before navigation starts.
   function restoreLocale() {
     var cur = pathLocale();
     if (!cur) return false; // pre-redirect page; the server will bounce us to /ko
     var saved = null;
     try { saved = localStorage.getItem(LS_LOCALE); } catch (e) {}
-    var sameOrigin = document.referrer && document.referrer.indexOf(location.origin) === 0;
-    if (sameOrigin) { saveLocale(); return false; }
     if (saved && LOCALES.indexOf(saved) !== -1 && saved !== cur) {
       var rest = location.pathname.replace(/^\/(ko|en|ja|ch)(?=\/|$)/, '');
       location.replace('/' + saved + rest + location.search + location.hash);
       return true;
     }
-    if (!saved) saveLocale();
+    saveLocale();
     return false;
   }
 
@@ -223,17 +232,22 @@
 
   var HANGUL = /[가-힣]/;
 
-  var KO_NUM_UNITS = { '조': 1e12, '억': 1e8, '만': 1e4 };
+  var KO_NUM_UNITS = { '경': 1e16, '조': 1e12, '억': 1e8, '천만': 1e7, '만': 1e4 };
 
   // "2086억 6801만 6589" → "208,668,016,589"
   function koreanNumberToEnglish(t) {
-    if (!/^[\d,\s조억만]+$/.test(t) || !/[조억만]/.test(t)) return null;
+    if (!/^[\d,.\s경조억천만]+$/.test(t) || !/[경조억만]/.test(t)) return null;
     var total = 0, rest = t.replace(/,/g, '');
-    var re = /(\d+)\s*([조억만])/g, m, tail = rest;
-    while ((m = re.exec(rest))) { total += parseInt(m[1], 10) * KO_NUM_UNITS[m[2]]; tail = rest.slice(m.index + m[0].length); }
-    var last = tail.trim().match(/^(\d+)$/);
-    if (last) total += parseInt(last[1], 10);
-    if (!total) return null;
+    var re = /(\d+(?:\.\d+)?)\s*(천만|경|조|억|만)/g, m, tail = rest, end = 0;
+    while ((m = re.exec(rest))) {
+      if (rest.slice(end, m.index).trim()) return null;
+      total += Number(m[1]) * KO_NUM_UNITS[m[2]];
+      end = m.index + m[0].length;
+      tail = rest.slice(end);
+    }
+    if (!end || (tail.trim() && !/^\d+(?:\.\d+)?$/.test(tail.trim()))) return null;
+    if (tail.trim()) total += Number(tail.trim());
+    if (!Number.isFinite(total)) return null;
     return total.toLocaleString('en-US');
   }
 
@@ -247,6 +261,10 @@
   function builtinRules(t, d) {
     var num = koreanNumberToEnglish(t);
     if (num != null) return num;
+    // Result icons prepend "hexa-" to a complete skill/group name. Resolve the
+    // group before the partial Korean-run pass splits off its Roman numerals.
+    var hexaLabel = t.match(/^hexa-(.+)$/i);
+    if (hexaLabel && d.dict[hexaLabel[1]]) return 'HEXA: ' + d.dict[hexaLabel[1]];
     var dm = t.match(/^(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*([월화수목금토일])요일$/);
     if (dm) return KO_DAYS[dm[4]] + ', ' + MONTHS[+dm[2]] + ' ' + dm[3] + ', ' + dm[1];
     if (UNIT_LABELS[t] != null) return UNIT_LABELS[t];
@@ -254,6 +272,10 @@
     if (lv) return 'Lv ' + lv[1] + '~' + lv[2];
     var lv1 = t.match(/^(\d+)제$/);
     if (lv1) return 'Lv ' + lv1[1];
+    var itemLevel = t.match(/^(\d+)제\s+(.+)$/);
+    if (itemLevel && d.dict[itemLevel[2]]) return 'Lv. ' + itemLevel[1] + ' ' + d.dict[itemLevel[2]];
+    var flatStat = t.match(/^(힘|민첩성|지력|운)\s+(\d+)\s+증가$/);
+    if (flatStat) return ({ '힘': 'STR', '민첩성': 'DEX', '지력': 'INT', '운': 'LUK' })[flatStat[1]] + ' +' + flatStat[2];
     var arrow = t.match(/^(\d+)\s*→\s*(\d+)\s*레벨$/);
     if (arrow) return 'Lv ' + arrow[1] + ' → ' + arrow[2];
     // "3극 4준(3어센)" = burst-window counts: N full bursts / M semi-bursts (K Ascent uses)
@@ -278,6 +300,7 @@
   // Phrase-level fallback for recurring composite families (boss measurement
   // notes etc.) whose exact variants are too numerous to enumerate.
   var PHRASES = [
+    [/캐릭터 \(환산주스탯 구간별\)/g, ' characters by Equivalent Stat range'],
     [/([A-Z]{1,3})직업/g, 'Class $1'],
     [/([A-Z]{1,3})보스/g, 'Boss $1'],
     [/체력 및 패턴 보정/g, 'HP & patterns adjusted'],
@@ -301,6 +324,9 @@
 
   function translateString(s) {
     var d = data();
+    // Exact text can include meaningful spaces or complete multi-line probability tables.
+    // Try it before trimming so these reviewed translations are reachable in the DOM.
+    if (Object.prototype.hasOwnProperty.call(d.dict, s)) return d.dict[s];
     var trimmed = s.trim();
     if (!trimmed) return null;
     var out = d.dict[trimmed];
@@ -1457,9 +1483,10 @@
   }
   function applyRouteGate() {
     var on = isInputRoute();
+    var routeName = on ? 'input' : (/^\/(ko|en|ja|ch)\/game\/spec-quiz(?:\/|$)/.test(location.pathname) ? 'spec-quiz' : '');
     var st = routeStyle();
     if (st && st.disabled !== !on) st.disabled = !on;
-    try { if (document.documentElement.getAttribute('data-msfix-route') !== (on ? 'input' : '')) document.documentElement.setAttribute('data-msfix-route', on ? 'input' : ''); } catch (e) {}
+    try { if (document.documentElement.getAttribute('data-msfix-route') !== routeName) document.documentElement.setAttribute('data-msfix-route', routeName); } catch (e) {}
     if (hasSelectorSupport() || !document.body) return;
     // Browsers without :has() — hide/unhide by hand (the header search persists across SPA
     // navigations, so it must be shown again when leaving the page).
@@ -3243,6 +3270,7 @@
   /* ---------------- boot ---------------------------------------------------------------- */
 
   if (restoreLocale()) return; // redirecting; nothing else to do on this load
+  document.addEventListener('click', rememberLanguageChoice, true);
   restoreRegion();
   hookWebpack();
   loadBindings();            // cloud character bindings (needed by the export hook below)
@@ -3250,6 +3278,7 @@
   applyRouteGate();          // hide native Load/Save + IGN search on /input only
 
   // Track SPA navigations for locale saving + fresh sweeps.
+  var lastNavigationPath = location.pathname;
   var origPush = history.pushState;
   history.pushState = function () {
     var r = origPush.apply(this, arguments);
@@ -3265,6 +3294,14 @@
   window.addEventListener('popstate', onNavigate);
 
   function onNavigate() {
+    var saved = null;
+    try { saved = localStorage.getItem(LS_LOCALE); } catch (e) {}
+    var wanted = navigationLocale(lastNavigationPath, location.pathname, saved);
+    lastNavigationPath = location.pathname;
+    if (wanted && wanted !== pathLocale()) {
+      location.replace('/' + wanted + location.pathname.replace(/^\/(ko|en|ja|ch)(?=\/|$)/, '') + location.search + location.hash);
+      return;
+    }
     saveLocale();
     backupRegion();
     applyRouteGate();

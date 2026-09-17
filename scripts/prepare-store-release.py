@@ -38,7 +38,7 @@ def main():
     for name in packages:
         run('gh', 'release', 'download', tag, '--repo', repo, '--pattern', name, '--dir', str(out))
     source = out / 'maplescouter-en-fix-source.zip'
-    run('git', 'archive', '--format=zip', '-o', str(source), tag, '--', 'src', 'data', 'build.js', 'build-extension.js', 'extension/manifest.json', 'extension/icons', 'README.md', 'BUILD.md', 'PRIVACY.md', 'LICENSE')
+    run('git', 'archive', '--format=zip', '-o', str(source), tag, '--', 'src', 'data', 'build.js', 'build-extension.js', 'scripts/translation-overrides.cjs', 'extension/manifest.json', 'extension/icons', 'README.md', 'BUILD.md', 'PRIVACY.md', 'LICENSE')
     with tempfile.TemporaryDirectory(prefix='msfix-build-') as work:
         with zipfile.ZipFile(source) as archive:
             archive.extractall(work)

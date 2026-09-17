@@ -46,8 +46,8 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
-      - name: Test publishing and cloud behavior
-        run: node --test test/cloud-connectivity.test.cjs test/publish-stores.test.mjs
+      - name: Test publishing, translations and cloud behavior
+        run: node --test test/*.test.*
       - name: Verify released packages and build reviewer source archive
         env:
           GH_TOKEN: ${{ github.token }}

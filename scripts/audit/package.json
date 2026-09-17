@@ -1,0 +1,7 @@
+{
+  "name": "maplescouter-live-audit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "AST parser for the weekly public-site audit (not shipped in the extension).",
+  "dependencies": { "acorn": "8.18.0" }
+}
