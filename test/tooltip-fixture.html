@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Floating layer regression</title><!-- INJECT -->
+<style>body{font:18px sans-serif;padding:24px}button{padding:12px}#layer{position:fixed;top:320px;left:40px;width:320px;min-height:120px;background:#ddd;padding:20px;border:1px solid #555}#layer button{display:block;width:100%}</style>
+</head><body>
+<h1>Floating layer regression</h1>
+<p>Choose a menu item. It must close without leaving a clone. Open a tooltip, then move onto it. It must stay visible until the pointer leaves. Escape must also close it.</p>
+<button id="menu">Open menu</button><button id="tip">Open tooltip</button><button id="check">Check closed</button>
+<p role="status" id="status">Ready</p>
+<script>
+const status = document.getElementById('status');
+function layer(content) {
+  document.getElementById('layer')?.remove();
+  const el = document.createElement('div'); el.id = 'layer';
+  el.setAttribute('data-radix-popper-content-wrapper',''); el.innerHTML = content;
+  document.body.append(el); return el;
+}
+document.getElementById('menu').onclick = () => {
+  const el = layer('<div role="dialog" data-slot="popover-content"><div role="listbox"><button role="option">Choose weapon</button></div></div>');
+  el.querySelector('button').onclick = () => { el.remove(); status.textContent = 'Weapon selected'; };
+};
+document.getElementById('tip').onclick = () => {
+  const el = layer('<div role="tooltip" data-slot="tooltip-content">Read-only equipment details. This tooltip is intentionally removed when you enter it.</div>');
+  el.onmouseenter = () => { setTimeout(() => { el.remove(); status.textContent = 'Native tooltip removed. Details should stay until you leave.'; }, 100); };
+};
+document.getElementById('check').onclick = () => {
+  status.textContent = document.getElementById('msfix-pinned-tooltip') || document.getElementById('layer') ? 'FAIL: a layer remains' : 'PASS: no stale layer';
+};
+</script></body></html>

@@ -44,6 +44,11 @@ const server = http.createServer((req, res) => {
   const bodyChunks = [];
   req.on('data', (c) => bodyChunks.push(c));
   req.on('end', () => {
+    if (req.url === '/en/__test/tooltip') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(fs.readFileSync(path.join(__dirname, 'tooltip-fixture.html'), 'utf8').replace('<!-- INJECT -->', INJECT));
+      return;
+    }
     // 1. Local userscript files
     if (req.url.startsWith('/__msfix/')) {
       const file = path.join(DIST, path.basename(req.url.split('?')[0]));

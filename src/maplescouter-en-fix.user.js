@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MapleScouter Enhancements
 // @namespace    https://github.com/tomerh2001/maplescouter-en-fix
-// @version      1.7.3
+// @version      1.7.4
 // @description  Full GMS English for maplescouter.com, a character picker with auto-save, cloud sync by IGN and history on the Character page, and it remembers your language and server and removes ads.
 // @author       tomerh2001
 // @license      MIT
@@ -257,6 +257,66 @@
   // Single-char measure/label nodes that follow numeric inputs.
   var UNIT_LABELS = { '성': '★', '회': 'time(s)', '개': 'pc(s)', '인': 'player(s)', '결과': 'Result', '없음': 'None', '만': '×10k', '억': '×100M', '배': '×' };
 
+  // Inner Ability builds these labels outside i18next. Match complete, known
+  // expressions before the older broad suffix rules, without changing game data.
+  function abilityText(t, d) {
+    var range = t.match(/^(레어|에픽|유니크|레전드리) (.+) : (\d+(?:\.\d+)?) ~ (\d+(?:\.\d+)?)$/);
+    if (range && d.dict[range[2]]) return d.dict[range[1]] + ' ' + d.dict[range[2]] + ': ' + range[3] + ' to ' + range[4];
+    var advancedIntro = '레전드리 전용. 명성치와 메소를 함께 쓰고 등급 상승은 없지만, 2·3번째 옵션도 레전드리가 나올 수 있습니다 (';
+    if (t.indexOf(advancedIntro) === 0 && /^\d+(?:\.\d+)?%\)\.$/.test(t.slice(advancedIntro.length))) return d.dict[advancedIntro] + t.slice(advancedIntro.length);
+    var honorIntro = '명성치로 등급과 옵션을 함께 재설정합니다. 옵션을 고정하지 않았을 때만 등급이 오릅니다';
+    if (t.indexOf(honorIntro) === 0 && /^(?: \((?:레어|에픽|유니크) → (?:에픽|유니크|레전드리) \d+(?:\.\d+)?%\))?\.$/.test(t.slice(honorIntro.length))) return d.dict[honorIntro].replace(/\.$/, '') + hangulRunPass(t.slice(honorIntro.length), d);
+    var m = t.match(/^(\d+)레벨마다 (공격력|마력) 1 증가$/);
+    if (m) return (m[2] === '공격력' ? 'ATT' : 'Magic ATT') + ' +1 per ' + m[1] + ' levels';
+    m = t.match(/^공격 속도 (\d+)단계 증가$/);
+    if (m) return 'Attack Speed +' + m[1];
+    m = t.match(/^버프 스킬의 지속 시간 (\d+(?:\.\d+)?)% 증가$/);
+    if (m) return 'Buff Duration +' + m[1] + '%';
+    m = t.match(/^AP를 직접 투자한 (STR|DEX|INT|LUK)의 (\d+(?:\.\d+)?)% 만큼 (STR|DEX|INT|LUK) 증가$/);
+    if (m) return m[3] + ' increase: ' + m[2] + '% of ' + m[1] + ' from assigned AP';
+    m = t.match(/^(STR|DEX|INT|LUK) (\d+), (STR|DEX|INT|LUK) (\d+) 증가$/);
+    if (m) return m[1] + ' +' + m[2] + ', ' + m[3] + ' +' + m[4];
+    m = t.match(/^(패시브 스킬 레벨|패시브 스킬의 스킬레벨|모든 능력치|다수 공격 스킬의 공격 대상) (\d+) 증가$/);
+    if (m) return ({ '패시브 스킬 레벨': 'Passive Skill Level', '패시브 스킬의 스킬레벨': 'Passive Skill Level', '모든 능력치': 'All Stats', '다수 공격 스킬의 공격 대상': 'Targets Hit for Multi-target Skills' })[m[1]] + ' +' + m[2];
+    m = t.match(/^(메소 획득량|아이템 드롭률|상태 이상에 걸린 대상 공격 시 데미지|일반 몬스터 공격 시 데미지) (\d+(?:\.\d+)?)% 증가$/);
+    if (m) return d.dict[m[1] + ' % 증가'].replace(/ %$/, '') + ' +' + m[2] + '%';
+    m = t.match(/^스킬 사용 시 (\d+(?:\.\d+)?)% 확률로 재사용 대기시간이 미적용$/);
+    if (m) return 'Chance to Skip Cooldown: ' + m[1] + '%';
+    m = t.match(/^방어력의 (\d+(?:\.\d+)?)% 만큼 데미지 고정값 증가$/);
+    if (m) return 'Flat Damage increase: ' + m[1] + '% of Defense';
+    m = t.match(/^((?:카오스|블랙|레전드리|심연의) 서큘레이터)(는 .+)$/);
+    if (m && d.dict[m[1]]) {
+      var rank = m[2].match(/^는 어빌리티 등급이 (레전드리|유니크) 이상이어야 씁니다$/);
+      if (rank) return d.dict[m[1]] + ' requires ' + d.dict[rank[1]] + ' Inner Ability or higher.';
+      if (d.dict[m[2]]) return d.dict[m[1]] + d.dict[m[2]];
+    }
+    m = t.match(/^고정해 둔 옵션\((.+)\)은 다른 줄에 다시 나오지 않아 목록에서 빠집니다\.$/);
+    if (m) {
+      var options = m[1].split(', ');
+      if (options.every(function (s) { return d.dict[s]; })) return 'Locked lines (' + options.map(function (s) { return d.dict[s]; }).join(', ') + ') cannot appear on another line, so they are excluded from the list.';
+    }
+    // Currency values can contain Korean large-number units. Convert each whole
+    // amount, not individual digits or unrelated numbers elsewhere in the label.
+    var prefix = t.indexOf('1회 비용 ') === 0 ? 'Cost per reroll: ' : '';
+    var costs = (prefix ? t.slice('1회 비용 '.length) : t).split(/\s*·\s*/).map(function (s) {
+      return s.replace(/^(명성치|메소) ([\d,.\s경조억천만]+)$/, '$2 $1');
+    });
+    if (costs.every(function (s) { return /^[\d,.\s경조억천만]+ (명성치|메소)$/.test(s) || /^(카오스|블랙|레전드리|심연의) 서큘레이터 [\d,]+개$/.test(s); })) {
+      var valid = true;
+      var values = costs.map(function (s) {
+        var circulator = s.match(/^((?:카오스|블랙|레전드리|심연의) 서큘레이터) ([\d,]+)개$/);
+        if (circulator) return d.dict[circulator[1]] + ' ×' + circulator[2];
+        var parts = s.match(/^([\d,.\s경조억천만]+) (명성치|메소)$/);
+        var amount = parts[1].trim(), formatted = koreanNumberToEnglish(amount);
+        if (formatted == null && /^\d+(?:,\d{3})*(?:\.\d+)?$/.test(amount)) formatted = amount;
+        if (formatted == null) valid = false;
+        return formatted + (parts[2] === '명성치' ? ' Honor EXP' : ' mesos');
+      });
+      if (valid) return prefix + values.join(' · ');
+    }
+    return null;
+  }
+
   // Built-in dynamic rules — run after dict/JSON rules miss.
   function builtinRules(t, d) {
     var num = koreanNumberToEnglish(t);
@@ -267,6 +327,10 @@
     if (hexaLabel && d.dict[hexaLabel[1]]) return 'HEXA: ' + d.dict[hexaLabel[1]];
     var dm = t.match(/^(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*([월화수목금토일])요일$/);
     if (dm) return KO_DAYS[dm[4]] + ', ' + MONTHS[+dm[2]] + ' ' + dm[3] + ', ' + dm[1];
+    var snapshotDate = t.match(/^(\d{1,2})\/(\d{1,2})\(([월화수목금토일])\) (\d{1,2})시 (\d{1,2})분 (\d{1,2})초$/);
+    if (snapshotDate) return MONTHS[+snapshotDate[1]] + ' ' + snapshotDate[2] + ' (' + KO_DAYS[snapshotDate[3]] + ') ' + snapshotDate[4].padStart(2, '0') + ':' + snapshotDate[5].padStart(2, '0') + ':' + snapshotDate[6].padStart(2, '0');
+    var mainShare = t.match(/^\(본캐 비율 ([\d,.]+%|-)\)$/);
+    if (mainShare) return '(Main character share: ' + mainShare[1] + ')';
     if (UNIT_LABELS[t] != null) return UNIT_LABELS[t];
     var lv = t.match(/^(\d+)\s*~\s*(\d+)제$/);
     if (lv) return 'Lv ' + lv[1] + '~' + lv[2];
@@ -346,6 +410,7 @@
         if (base != null) out = base + ' ' + m[2].replace(/\s+/g, '');
       }
     }
+    if (out == null) out = abilityText(trimmed, d);
     if (out == null && d.rules) {
       for (var i = 0; i < d.rules.length; i++) {
         var rule = d.rules[i]; // [regexSource, flags, template] — template uses $1..$9
@@ -1314,8 +1379,17 @@
   document.addEventListener('mousemove', function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, true);
 
   var FLOAT_SELECTOR = '[data-radix-popper-content-wrapper], [role="tooltip"], [data-side][data-state]';
+  var INFO_FLOAT_SELECTOR = '[role="tooltip"], [data-slot="tooltip-content"], [data-slot="hover-card-content"]';
+  var INTERACTIVE_FLOAT_SELECTOR = '[role="dialog"], [role="menu"], [role="listbox"], input, select, textarea, button, a[href], [contenteditable="true"]';
   var floatRects = new Map(); // element -> DOMRect (last known)
   var pinned = null;
+  // A clone has no React handlers. Never preserve a menu, form, or other
+  // interactive layer after the site closes it, and never clone our own clone.
+  function canPinFloating(el) {
+    if (el.closest('#msfix-pinned-tooltip, [data-msfix-ui]')) return false;
+    if (el.matches(INTERACTIVE_FLOAT_SELECTOR) || el.querySelector(INTERACTIVE_FLOAT_SELECTOR)) return false;
+    return el.matches(INFO_FLOAT_SELECTOR) || !!el.querySelector(INFO_FLOAT_SELECTOR);
+  }
   // keep tracked rects accurate while scrolling (tooltips scroll with content until removed)
   window.addEventListener('scroll', function () { refreshFloatRects(); }, { passive: true, capture: true });
 
@@ -1325,6 +1399,7 @@
     if (root.matches && root.matches(FLOAT_SELECTOR)) els.push(root);
     if (root.querySelectorAll) els.push.apply(els, root.querySelectorAll(FLOAT_SELECTOR));
     for (var i = 0; i < els.length; i++) {
+      if (!canPinFloating(els[i])) continue;
       var r = els[i].getBoundingClientRect();
       if (r.height > 60 && r.width > 100) floatRects.set(els[i], r);
     }
@@ -1375,10 +1450,11 @@
       var r = floatRects.get(candidates[i]);
       if (r) {
         floatRects.delete(candidates[i]);
-        if (insideRect(r, 6)) { pinTooltip(candidates[i], r); return; }
+        if (canPinFloating(candidates[i]) && insideRect(r, 6)) { pinTooltip(candidates[i], r); return; }
       }
     }
   }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') unpin(); }, true);
 
   /* ---------------- 4b. Ad removal ------------------------------------------------------ */
   // Static slots/banners are hidden by the injected CSS; popup ad modals are built
@@ -1484,6 +1560,7 @@
   function applyRouteGate() {
     var on = isInputRoute();
     var routeName = on ? 'input' : (/^\/(ko|en|ja|ch)\/game\/spec-quiz(?:\/|$)/.test(location.pathname) ? 'spec-quiz' : '');
+    if (/^\/en\/(?:simulator\/)?ability\/?$/.test(location.pathname)) routeName = 'ability';
     var st = routeStyle();
     if (st && st.disabled !== !on) st.disabled = !on;
     try { if (document.documentElement.getAttribute('data-msfix-route') !== routeName) document.documentElement.setAttribute('data-msfix-route', routeName); } catch (e) {}

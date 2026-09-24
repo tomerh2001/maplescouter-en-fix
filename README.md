@@ -38,7 +38,7 @@ Credentials are stored in GitHub Actions secrets, never in the extension package
 
 A weekly audit checks MapleScouter for new text, changed pages, and layout or compatibility problems. It runs on Thursdays at 10:00 (Asia/Jerusalem). Updates are tested, released on GitHub, and submitted to both Chrome and Firefox. The stores publish approved updates automatically. If nothing needs changing, no new version is uploaded.
 
-See the [maintenance runbook](docs/WEEKLY-MAINTENANCE.md) and [audit reports](docs/audits/). Version 1.7.3 adds the September site translations, readable equipment labels in the new stat quiz, and a fix for English results reverting to Korean.
+See the [maintenance runbook](docs/WEEKLY-MAINTENANCE.md) and [audit reports](docs/audits/). Version 1.7.4 translates the new Inner Ability tools, Soul equipment controls, HEXA reset guidance, and ranking filters. It also fixes clipped English ability cards and dropdowns that could stay visible but stop responding.
 
 ## Features
 
@@ -87,7 +87,7 @@ The site's **Load Preset / Save Preset** buttons and the IGN search on `/input` 
 
 | Layer | What it does |
 |---|---|
-| **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~6,400 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
+| **i18n bundle patch** | Wraps the site's webpack chunk loader and merges ~6,600 added/corrected keys into `en/common.json` before i18next consumes it. Bundle detection is content-based, so it survives site redeploys. |
 | **DOM dictionary** | A `MutationObserver` + exact-match KO→EN dictionary (official game-data join) for text that's hardcoded or arrives from the API at runtime, plus pattern rules for dynamic strings (Korean number units 억/만, dates, burst-window notation like 3극 4준). |
 | **Persistence & QoL** | Locale/region memory, ad removal, tooltip keep-alive, preset import/overwrite — all in the userscript core. |
 | **Characters & cloud** | Drives the site's own zustand stores (`manual-store` = the form's draft, `preset` = the slots), captured while webpack executes them, so loads and auto-saves need no reload. Slot↔IGN links live in `localStorage` (`msfix:cloud:*`); the backend is a small file-backed JSON API ([maplescouter-cloud](https://github.com/tomerh2001/maplescouter-cloud)) reached with plain `fetch` + `If-Match` for conflict detection. Character looks come from `GET scouter.tomerh2001.com/v1/avatar/:ign`, which proxies Nexon's public GMS ranking API (the site cannot call it directly: no CORS) and caches each answer for a day; the browser keeps its own copy in `localStorage` (`msfix:cloud:avatars`, hits for 7 days, misses for 1 day) and loads the picture straight from Nexon's avatar image host. Set `localStorage.msfix:cloud:url` to point the script at another backend (e.g. a local one for testing). |

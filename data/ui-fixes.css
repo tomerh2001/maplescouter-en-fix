@@ -87,3 +87,30 @@ html[data-msfix-route="spec-quiz"] main .grid.grid-cols-5.grid-rows-6 button > s
   line-height: 1.15;
   overflow-wrap: anywhere;
 }
+
+/* Inner Ability's narrow cards and fixed-height costs cut off English stat
+   values. Keep complete lines visible in both the calculator and simulator. */
+html[data-msfix-route="ability"] main ul:has(> li > [data-slot="tooltip-trigger"]) {
+  height: auto;
+  min-height: 72px;
+}
+html[data-msfix-route="ability"] main li:has(> [data-slot="tooltip-trigger"]) {
+  height: auto;
+  min-height: 20px;
+}
+html[data-msfix-route="ability"] main li > [data-slot="tooltip-trigger"].truncate {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+html[data-msfix-route="ability"] main button[class*="h-[54px]"] {
+  height: auto;
+  min-height: 54px;
+  white-space: normal;
+}
+html[data-msfix-route="ability"] main button[class*="h-[54px]"] > span {
+  max-width: 100%;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}

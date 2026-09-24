@@ -122,3 +122,72 @@ test('first visit records the visible locale and ordinary navigation keeps it', 
   assert.equal(h.value(), 'en');
   assert.equal(h.ctx.navigationLocale('/en/input', '/en/base', 'en'), 'en');
 });
+
+const september24 = read('data/overrides/2026-09-24.json');
+test('September 24 translations preserve placeholders and do not rewrite their own English', () => {
+  for (const [ko, en] of Object.entries(september24)) {
+    assert.equal(patch[ko], en, ko);
+    assert.equal(ctx.translateString(ko), en, ko);
+    assert.doesNotMatch(en, /[가-힣—]/);
+    assert.deepEqual(en.match(/\{\{?\w+\}?\}/g), ko.match(/\{\{?\w+\}?\}/g), ko);
+    assert.ok(ctx.translateString(en) === null || ctx.translateString(en) === en, en);
+  }
+});
+
+test('Inner Ability generated rolls retain the stat, value and unit', () => {
+  for (const [ko, en] of [
+    ['공격 속도 1단계 증가', 'Attack Speed +1'],
+    ['버프 스킬의 지속 시간 38% 증가', 'Buff Duration +38%'],
+    ['10레벨마다 공격력 1 증가', 'ATT +1 per 10 levels'],
+    ['16레벨마다 마력 1 증가', 'Magic ATT +1 per 16 levels'],
+    ['AP를 직접 투자한 DEX의 5% 만큼 STR 증가', 'STR increase: 5% of DEX from assigned AP'],
+    ['STR 20, DEX 10 증가', 'STR +20, DEX +10'],
+    ['패시브 스킬 레벨 1 증가', 'Passive Skill Level +1'],
+    ['패시브 스킬의 스킬레벨 1 증가', 'Passive Skill Level +1'],
+    ['모든 능력치 40 증가', 'All Stats +40'],
+    ['다수 공격 스킬의 공격 대상 1 증가', 'Targets Hit for Multi-target Skills +1'],
+    ['메소 획득량 20% 증가', 'Mesos Obtained +20%'],
+    ['아이템 드롭률 15% 증가', 'Item Drop Rate +15%'],
+    ['스킬 사용 시 20% 확률로 재사용 대기시간이 미적용', 'Chance to Skip Cooldown: 20%'],
+    ['방어력의 25% 만큼 데미지 고정값 증가', 'Flat Damage increase: 25% of Defense'],
+  ]) assert.equal(ctx.translateString(ko), en, ko);
+});
+
+test('Inner Ability costs convert complete quantities in either site layout', () => {
+  for (const [ko, en] of [
+    ['2만 명성치 · 200만 메소', '20,000 Honor EXP · 2,000,000 mesos'],
+    ['1회 비용 명성치 2만 · 메소 200만', 'Cost per reroll: 20,000 Honor EXP · 2,000,000 mesos'],
+    ['명성치 1억 2000만', '120,000,000 Honor EXP'],
+    ['0 명성치', '0 Honor EXP'],
+    ['메소 1.5억', '150,000,000 mesos'],
+    ['1회 비용 심연의 서큘레이터 1개', 'Cost per reroll: Abyss Circulator ×1'],
+  ]) assert.equal(ctx.translateString(ko), en, ko);
+  for (const value of ['1..5억 메소','23천억 명성치','HTomer','메소친구','some 200만 메소 text']) {
+    assert.equal(ctx.abilityText(value, { dict }), null, value);
+  }
+});
+
+test('Circulator constraints translate whole messages without losing rank or line restrictions', () => {
+  assert.equal(ctx.translateString('카오스 서큘레이터는 어빌리티 등급이 유니크 이상이어야 씁니다'), 'Chaos Circulator requires Unique Inner Ability or higher.');
+  assert.equal(ctx.translateString('심연의 서큘레이터는 어빌리티 등급이 레전드리 이상이어야 씁니다'), 'Abyss Circulator requires Legendary Inner Ability or higher.');
+  assert.equal(ctx.translateString('블랙 서큘레이터는 2·3번째 옵션이 레전드리면 쓸 수 없습니다'), 'Black Circulator cannot be used if line 2 or 3 is Legendary.');
+  assert.equal(ctx.translateString('레전드리 서큘레이터는 이미 레전드리인 어빌리티에는 쓸 수 없습니다'), 'Legendary Circulator cannot be used on Legendary Inner Ability.');
+});
+
+test('assembled ability explanations preserve live probabilities and locked option names', () => {
+  const prefix = '레전드리 전용. 명성치와 메소를 함께 쓰고 등급 상승은 없지만, 2·3번째 옵션도 레전드리가 나올 수 있습니다 (';
+  for (const odds of ['2','2.5']) assert.equal(ctx.translateString(prefix + odds + '%).'), september24[prefix] + odds + '%).');
+  const honor = '명성치로 등급과 옵션을 함께 재설정합니다. 옵션을 고정하지 않았을 때만 등급이 오릅니다';
+  const out = ctx.translateString(honor + ' (유니크 → 레전드리 1%).');
+  assert.doesNotMatch(out, /[가-힣]/);
+  assert.match(out, /Unique → Legendary 1%/);
+  const locked = ctx.translateString('고정해 둔 옵션(보스 몬스터 공격 시 데미지 % 증가)은 다른 줄에 다시 나오지 않아 목록에서 빠집니다.');
+  assert.match(locked, /Locked lines \(Boss Damage %\)/);
+  assert.doesNotMatch(locked, /[가-힣]/);
+});
+
+test('new ranking timestamps stay timestamps rather than combat-duration labels', () => {
+  assert.equal(ctx.translateString('9/20(일) 16시 20분 05초'), 'Sep 20 (Sun) 16:20:05');
+  assert.equal(ctx.translateString('(본캐 비율 15.25%)'), '(Main character share: 15.25%)');
+  assert.equal(ctx.translateString('레전드리 공격 속도 단계 증가 : 1 ~ 1'), 'Legendary Attack Speed: 1 to 1');
+});
